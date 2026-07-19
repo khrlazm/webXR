@@ -846,7 +846,7 @@ function xrInput(dt){
     /* left (or unknown) stick: smooth locomotion during gameplay */
     if(!moveAllowed()) continue;
     if(Math.abs(x)<.15&&Math.abs(y)<.15) continue;
-    const q=new THREE.Quaternion(); renderer.xr.getCamera(camera).getWorldQuaternion(q);
+    const q=new THREE.Quaternion(); camera.getWorldQuaternion(q);
     const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(q); fwd.y=0; fwd.normalize();
     const rightv=new THREE.Vector3(-fwd.z,0,fwd.x);
     rig.position.addScaledVector(fwd,-y*1.8*dt).addScaledVector(rightv,(hand==='left'?x:0)*1.8*dt);
@@ -1318,9 +1318,12 @@ async function playSceneIII(){
 /* ============================================================
    MAIN LOOP
    ============================================================ */
-function animate(){
+function animate(time){
+  try{
   const dt=Math.min(clock.getDelta(),.05), t=clock.elapsedTime;
-  gsap.updateRoot(t);   /* keeps all tweens alive inside XR sessions */
+  /* Drive GSAP from the XR-safe loop, using the frame timestamp the
+     session provides (performance.now epoch in both flat and VR). */
+  gsap.updateRoot((typeof time==='number'?time:performance.now())/1000);
   stateT+=dt;
   flickerTorches(t);
   if(world.dust) world.dust.rotation.y=t*.006;
@@ -1354,11 +1357,32 @@ function animate(){
     }
     A.setWhisper(gaze? .05+intensity*.06 : 0);
   }
-  if(!xrMode) desktopMove(dt); else xrInput(dt);
-  hoverCheck();
-  if(typeof vrUI!=='undefined') vrUI.update(dt);
+  try{ if(!xrMode) desktopMove(dt); else xrInput(dt); }catch(err){ reportErr('input',err); }
+  try{ hoverCheck(); }catch(err){ reportErr('hover',err); }
+  try{ if(typeof vrUI!=='undefined') vrUI.update(dt); }catch(err){ reportErr('vrUI',err); }
   renderer.render(scene,camera);
+  }catch(err){
+    /* never let one bad frame kill the XR loop (r128 requests the next
+       frame only after this callback returns) */
+    reportErr('frame',err);
+    try{ renderer.render(scene,camera); }catch(e){}
+  }
 }
+/* ---------- error surfacing (DOM + inside the headset) ---------- */
+const errSeen=new Set();
+function reportErr(where,err){
+  const msg=where+': '+(err&&err.message?err.message:String(err));
+  if(errSeen.has(msg)) return; errSeen.add(msg);
+  console.error('[TLA]',where,err);
+  let d=document.getElementById('errbox');
+  if(!d){ d=document.createElement('div'); d.id='errbox';
+    d.style.cssText='position:fixed;bottom:8px;right:8px;z-index:60;max-width:46vw;background:rgba(40,0,0,.85);color:#ff9b8a;font:11px monospace;padding:8px 10px;border:1px solid #7d1c26;white-space:pre-wrap';
+    document.body.appendChild(d); }
+  d.textContent=(d.textContent+'\n'+msg).trim().split('\n').slice(-5).join('\n');
+  if(typeof vrUI!=='undefined'&&vrUI.error) vrUI.error(msg);
+}
+window.addEventListener('error',e=>reportErr('window',e.error||e.message));
+window.addEventListener('unhandledrejection',e=>reportErr('promise',e.reason));
 
 /* ============================================================
    BOOT
@@ -1389,7 +1413,8 @@ initThree(); buildMaterials(); buildPalace(); buildCharacters();
 enableTorchShadows(); initDesktopControls(); initXR();
 clock=new THREE.Clock();
 /* In immersive VR, window.requestAnimationFrame is suspended, which freezes
-   GSAP's internal ticker. Detach it and pump GSAP from the XR render loop. */
+   GSAP's internal ticker. Detach it; animate() pumps gsap.updateRoot with the
+   frame timestamp instead, in both flat and immersive modes. */
 gsap.ticker.remove(gsap.updateRoot);
 gsap.ticker.lagSmoothing(0);
 renderer.setAnimationLoop(animate);
@@ -1409,7 +1434,7 @@ if(navigator.xr){
    for flat mode; these render only while xrMode is true.
    ============================================================ */
 const vrUI=(()=>{
-  let root=null, subP, actP, boardP, judgeP, fadeSphere, intGroup, intFill;
+  let root=null, subP, actP, boardP, judgeP, errP, fadeSphere, intGroup, intFill;
   let subT=null, actT=null, boardT=null;
   const strip=h=>{const d=document.createElement('div');d.innerHTML=h||'';return d.textContent||'';};
 
@@ -1445,6 +1470,7 @@ const vrUI=(()=>{
     boardP=mkPanel(1024,440,1.05); boardP.mesh.position.set(-.82,-.1,-1.85); boardP.mesh.rotation.y=.38; root.add(boardP.mesh);
     judgeP=mkPanel(512,160,.75);   judgeP.mesh.position.set(0,-.12,-1.55); root.add(judgeP.mesh);
 
+    errP=mkPanel(1024,190,1.3,1002); errP.mesh.position.set(0,.52,-1.8); root.add(errP.mesh);
     fadeSphere=new THREE.Mesh(new THREE.SphereGeometry(.45,16,16),
       new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0,side:THREE.BackSide,depthTest:false,depthWrite:false}));
     fadeSphere.renderOrder=1000; fadeSphere.visible=false; camera.add(fadeSphere);
@@ -1532,12 +1558,25 @@ const vrUI=(()=>{
     actP.mesh.renderOrder=1001; actP.mesh.visible=true;
     clearTimeout(actT);
   }
+  let errT=null;
+  function error(msg){
+    if(!root) return;
+    const g=errP.g, W=1024, H=190;
+    g.clearRect(0,0,W,H);
+    g.fillStyle='rgba(40,0,0,.85)'; g.fillRect(0,0,W,H);
+    g.strokeStyle='#7d1c26'; g.lineWidth=3; g.strokeRect(4,4,W-8,H-8);
+    g.textAlign='left'; g.fillStyle='#ff9b8a'; g.font='26px monospace';
+    wrap(g,String(msg).slice(0,220),28,52,W-56,34);
+    errP.tex.needsUpdate=true; errP.mesh.visible=true;
+    clearTimeout(errT); errT=setTimeout(()=>{ errP.mesh.visible=false; },12000);
+  }
   const tmpP=new THREE.Vector3(), tmpQ=new THREE.Quaternion(), tmpE=new THREE.Euler();
   function attachToControllers(){
+    if(!controllers||!controllers.length) return;
     let lc=null, rc=null;
     for(const c of controllers){
-      if(c.userData.handedness==='left') lc=c;
-      else if(c.userData.handedness==='right') rc=c;
+      const h=c&&c.userData&&c.userData.handedness;
+      if(h==='left') lc=c; else if(h==='right') rc=c;
     }
     if(!lc) lc=controllers[0]||null;
     if(!rc) rc=controllers[1]||controllers[0]||null;
@@ -1577,7 +1616,7 @@ const vrUI=(()=>{
       intFill.scale.x=v; intFill.position.x=-.45*(1-v);
     }
   }
-  return {init,sub,act,board,judge,fade,end,update};
+  return {init,sub,act,board,judge,fade,end,update,error};
 })();
 vrUI.init();
 </script>
