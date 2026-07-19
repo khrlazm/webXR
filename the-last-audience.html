@@ -669,29 +669,8 @@ function buildCharacters(){
   giveKris(chars.jebat, 0x8f1f1f);
   chars.jebat.position.set(1.4,0,-2.2); chars.jebat.rotation.y=Math.PI*.9; scene.add(chars.jebat);
 
-  /* ministers kneeling in rows + guards */
+  /* the court is heard, never seen — minister voices come from off-stage */
   chars.npcs=[];
-  const palette=[0x3a3a55,0x4a3350,0x2e4640,0x50402a,0x39424f];
-  for(let s of [-1,1]) for(let i=0;i<5;i++){
-    const m=buildFigure({baju:palette[(i+ (s>0?2:0))%palette.length], kain:0x6b5a3a, seluar:0x22201c, head:0x181820});
-    m.position.set(s*2.9, 0, .5+i*1.5);
-    m.rotation.y = s>0 ? -Math.PI/2.4 : Math.PI/2.4;
-    /* kneel pose */
-    m.hips.position.y=.52;
-    m.legs.forEach(l=>{ l.rotation.x=-1.5; l.shin.rotation.x=2.4; });
-    m.spine.rotation.x=.16;
-    m.arms.forEach(a=>{ a.rotation.x=-.5; a.fore.rotation.x=-.9; });
-    m.userData.seed=Math.random()*10;
-    scene.add(m); chars.npcs.push(m);
-  }
-  for(let s of [-1,1]){
-    const gd=buildFigure({baju:0x27302a, kain:0x555, seluar:0x1c1c1c, head:0x101010});
-    gd.position.set(s*2.6,0,HALL.D/2-1.2); gd.rotation.y=Math.PI;
-    const spear=new THREE.Mesh(new THREE.CylinderGeometry(.02,.02,2.3),M.woodDark);
-    spear.position.set(s*.28,1.15,.1); gd.add(spear);
-    const tip=new THREE.Mesh(new THREE.ConeGeometry(.05,.18,6),M.blade); tip.position.set(s*.28,2.35,.1); gd.add(tip);
-    gd.userData.seed=Math.random()*10; scene.add(gd); chars.npcs.push(gd);
-  }
 
   /* the servant (Act iii) */
   chars.servant=buildFigure({baju:0x6b6152, kain:0x4a4237, seluar:0x33302a, head:0x2a2620});
@@ -837,20 +816,40 @@ function initXR(){
     const tip=new THREE.Mesh(new THREE.SphereGeometry(.012,8,8),new THREE.MeshBasicMaterial({color:0xecd08a}));
     c.add(tip);
     c.addEventListener('selectstart',()=>interactFromController(c));
+    c.addEventListener('connected',e=>{ c.userData.handedness=e.data&&e.data.handedness; });
+    c.addEventListener('disconnected',()=>{ c.userData.handedness=null; });
     rig.add(c); controllers.push(c);
   }
 }
-function xrLocomotion(dt){
-  const session=renderer.xr.getSession(); if(!session||!moveAllowed()) return;
+let snapLatch=0;
+function snapTurn(angle){
+  /* rotate the rig around the headset position, not the rig origin */
+  const head=new THREE.Vector3(); camera.getWorldPosition(head);
+  const q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),angle);
+  rig.position.sub(head); rig.position.applyQuaternion(q); rig.position.add(head);
+  rig.quaternion.premultiply(q);
+  clampRig();
+}
+function xrInput(dt){
+  const session=renderer.xr.getSession(); if(!session) return;
   for(const src of session.inputSources){
     if(!src.gamepad) continue;
     const ax=src.gamepad.axes;
     const x=ax[2]??ax[0]??0, y=ax[3]??ax[1]??0;
+    const hand=src.handedness;
+    /* right stick: 45-degree snap turn — works in cutscenes too */
+    if(hand!=='left'){
+      if(Math.abs(x)>.6 && snapLatch===0){ snapLatch=Math.sign(x); snapTurn(-Math.sign(x)*Math.PI/4); }
+      else if(Math.abs(x)<.3) snapLatch=0;
+      if(hand==='right') continue;
+    }
+    /* left (or unknown) stick: smooth locomotion during gameplay */
+    if(!moveAllowed()) continue;
     if(Math.abs(x)<.15&&Math.abs(y)<.15) continue;
     const q=new THREE.Quaternion(); renderer.xr.getCamera(camera).getWorldQuaternion(q);
     const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(q); fwd.y=0; fwd.normalize();
     const rightv=new THREE.Vector3(-fwd.z,0,fwd.x);
-    rig.position.addScaledVector(fwd,-y*1.8*dt).addScaledVector(rightv,x*1.8*dt);
+    rig.position.addScaledVector(fwd,-y*1.8*dt).addScaledVector(rightv,(hand==='left'?x:0)*1.8*dt);
     clampRig();
   }
 }
@@ -1092,19 +1091,36 @@ let circling=null;
 /* ---------- Act B : The Duel ---------- */
 let intensity=.2, duelBeat=0, duelRunning=false, activeRings=[], duelMusicOn=false;
 const DUEL_BEATS=16;
+function placeStageKit(){
+  const head=new THREE.Vector3(); camera.getWorldPosition(head);
+  const dir=new THREE.Vector3(); camera.getWorldDirection(dir); dir.y=0;
+  if(dir.lengthSq()<.001) dir.set(0,0,-1); dir.normalize();
+  const right=new THREE.Vector3(-dir.z,0,dir.x);
+  const base=new THREE.Vector3(head.x,0,head.z).addScaledVector(dir,.95);
+  base.x=THREE.MathUtils.clamp(base.x,-BOUNDS.x,BOUNDS.x);
+  base.z=THREE.MathUtils.clamp(base.z,BOUNDS.zMin-.3,BOUNDS.zMax+.3);
+  props.drums.forEach(d=>{
+    d.group.position.copy(base).addScaledVector(right,d.side*.5);
+  });
+  const gr=props.gongRack;
+  gr.position.copy(new THREE.Vector3(head.x,0,head.z)).addScaledVector(right,1.25).addScaledVector(dir,.45);
+  gr.lookAt(head.x,0,head.z);
+}
 function playGameB(){
   setState(STATE.PLAY_B);
   document.body.classList.remove('cutscene');
   if(!xrMode) cross.classList.remove('hidden');
   showAct('GAMEPLAY · B','THE DUEL');
   setObjective('Gameplay B — The Duel','You do not fight. You shape the performance.',
-    'Drums — meet each clash · Torches — bring back light<br>Gongs — call the gamelan · Ministers — carry their fear');
+    'Drums — meet each clash · Torches — bring back light<br>Gongs — call the gamelan');
   setControlsHint(xrMode
     ? 'Trigger on the drum as the ring closes<br>Point at dark torches to relight · strike the gongs'
     : 'Drag — look · SPACE or click the drum on the ring<br>Click dark torches to relight · click the gongs');
   intensityWrap.classList.remove('hidden');
   circling=null;
-  /* reveal the stagehand's kit */
+  /* reveal the stagehand's kit — placed in front of wherever the player
+     is actually standing and facing (essential for VR) */
+  placeStageKit();
   props.drums.forEach(d=>{ d.group.visible=true; d.group.scale.set(.01,.01,.01);
     gsap.to(d.group.scale,{x:1,y:1,z:1,duration:1,ease:'back.out(1.6)'}); });
   props.gongRack.visible=true;
@@ -1261,7 +1277,7 @@ async function playSceneIII(){
   A.thunder(.4);
   await wait(3);
   /* the palace slowly empties */
-  say('','<em>The palace empties. Only you remain.</em>',4.5);
+  say('','<em>The hall is empty. Only you remain.</em>',4.5);
   chars.npcs.forEach((m,i)=>{
     m.traverse(o=>{ if(o.isMesh){ o.material=o.material.clone(); o.material.transparent=true; } });
     gsap.delayedCall(i*.4,()=>{ m.traverse(o=>{ if(o.isMesh) gsap.to(o.material,{opacity:0,duration:3,onComplete:()=>{m.visible=false;}}); }); });
@@ -1335,7 +1351,7 @@ function animate(){
     }
     A.setWhisper(gaze? .05+intensity*.06 : 0);
   }
-  if(!xrMode) desktopMove(dt); else xrLocomotion(dt);
+  if(!xrMode) desktopMove(dt); else xrInput(dt);
   hoverCheck();
   if(typeof vrUI!=='undefined') vrUI.update(dt);
   renderer.render(scene,camera);
@@ -1442,7 +1458,7 @@ const vrUI=(()=>{
     })());
     cap.position.y=.11;
     intGroup.add(back,intFill,cap);
-    intGroup.position.set(0,1.5,4.4); intGroup.rotation.y=Math.PI; intGroup.visible=false; scene.add(intGroup);
+    intGroup.visible=false; scene.add(intGroup);
   }
 
   function sub(speaker,html,dur){
@@ -1510,17 +1526,46 @@ const vrUI=(()=>{
     clearTimeout(actT);
   }
   const tmpP=new THREE.Vector3(), tmpQ=new THREE.Quaternion(), tmpE=new THREE.Euler();
+  function attachToControllers(){
+    let lc=null, rc=null;
+    for(const c of controllers){
+      if(c.userData.handedness==='left') lc=c;
+      else if(c.userData.handedness==='right') rc=c;
+    }
+    if(!lc) lc=controllers[0]||null;
+    if(!rc) rc=controllers[1]||controllers[0]||null;
+    /* objective / hints board rides the left wrist */
+    if(lc && boardP.mesh.parent!==lc){
+      lc.add(boardP.mesh);
+      boardP.mesh.position.set(0,.11,-.04);
+      boardP.mesh.rotation.set(-.75,0,0);
+      boardP.mesh.scale.setScalar(.30);
+    }
+    /* rhythm judgement flashes just above the striking hand */
+    if(rc && judgeP.mesh.parent!==rc){
+      rc.add(judgeP.mesh);
+      judgeP.mesh.position.set(0,.14,-.05);
+      judgeP.mesh.rotation.set(-.75,0,0);
+      judgeP.mesh.scale.setScalar(.55);
+    }
+  }
   function update(dt){
     if(!root) return;
     if(!xrMode){ root.visible=false; intGroup.visible=false; return; }
     root.visible=true;
+    attachToControllers();
+    /* dialogue + act cards keep the gentle head-follow */
     camera.getWorldPosition(tmpP); camera.getWorldQuaternion(tmpQ);
     tmpE.setFromQuaternion(tmpQ,'YXZ');
     const targetQ=new THREE.Quaternion().setFromEuler(new THREE.Euler(0,tmpE.y,0));
     root.position.lerp(tmpP,.14);
     root.quaternion.slerp(targetQ,.08);
-    intGroup.visible=(state===STATE.PLAY_B);
+    /* intensity bar hovers over the drums, wherever they were placed */
+    intGroup.visible=(state===STATE.PLAY_B && props.drums[0].group.visible);
     if(intGroup.visible){
+      const a=props.drums[0].group.position, b=props.drums[1].group.position;
+      intGroup.position.set((a.x+b.x)/2, 1.35, (a.z+b.z)/2);
+      intGroup.lookAt(tmpP.x, 1.35, tmpP.z);
       const v=Math.max(.02,intensity);
       intFill.scale.x=v; intFill.position.x=-.45*(1-v);
     }
