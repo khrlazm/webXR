@@ -1,0 +1,429 @@
+This structure is actually very well suited to VR. A one-shot scene (no camera cuts) is a natural fit for XR because the player occupies the space like a theatre audience. Think of it as a hybrid of immersive theatre, walking simulator, and interactive drama.
+
+Working Title
+
+The Last Audience
+A One-Shot XR Interactive Theatre Experience
+
+"In the court of Melaka, loyalty and justice become indistinguishable."
+
+High Concept
+
+The player is an unseen court attendant inside the Balairong Seri (royal audience hall) during the final confrontation between Hang Tuah and Hang Jebat.
+
+The player never becomes either hero.
+
+Instead, they witness history while subtly influencing the emotional rhythm of the scene.
+
+Runtime
+
+10–15 minutes
+
+No loading.
+
+No scene transitions.
+
+Everything occurs inside one palace hall.
+
+Core Loop
+Narrative
+↓
+
+Interactive Observation
+
+↓
+
+Narrative
+
+↓
+
+Interactive Decision
+
+↓
+
+Narrative Ending
+
+Exactly
+
+i
+↓
+
+A
+
+↓
+
+ii
+
+↓
+
+B
+
+↓
+
+iii
+Palace Layout
+                THRONE
+
+          Sultan (hidden)
+
+         Palace Curtain
+
+────────────────────────
+
+      Hang Jebat
+
+           X
+
+                 Player
+
+                     X
+
+      Ministers
+
+ Guards         Guards
+
+────────────────────────
+
+ Palace Entrance
+
+       Hang Tuah
+
+Entire experience uses one continuous take.
+
+No cuts.
+
+No teleport.
+
+Player may freely move around a limited palace space.
+
+Scene i
+"The Return"
+
+Length
+
+3 minutes
+
+Player enters palace.
+
+Court is silent.
+
+Everyone avoids eye contact.
+
+Rain outside.
+
+Torchlight flickers.
+
+Ambient audio
+
+distant thunder
+dripping rain
+insects
+palace wood creaks
+Dialogue
+
+Minister
+
+Hang Tuah has returned.
+
+Another minister
+
+We thought him dead.
+
+Jebat laughs.
+
+Dead?
+
+Loyalty buries men before swords do.
+
+Silence.
+
+Palace doors open.
+
+Hang Tuah enters.
+
+Very slow walk.
+
+No music.
+
+Only footsteps.
+
+Tuah
+
+Jebat.
+
+Jebat
+
+Brother.
+
+Fade naturally into gameplay.
+
+Gameplay A
+Observe the Palace
+
+Duration
+
+2–3 minutes
+
+Player explores.
+
+Interactive hotspots.
+
+Examine Tuah's Kris
+
+Narration
+
+The weapon of duty.
+
+Examine Jebat's Kris
+
+Narration
+
+The weapon of justice.
+
+Examine Throne
+
+Narration
+
+Empty.
+
+Power remains.
+
+Authority hides.
+
+Examine Blood Stains
+
+Narration
+
+Yesterday's justice.
+
+Today's rebellion.
+
+Optional conversations
+
+Player approaches ministers.
+
+Short whispers.
+
+We deserve neither man.
+
+When every hotspot has been viewed
+
+Dialogue resumes automatically.
+
+Scene ii
+Debate
+
+Both warriors circle.
+
+No combat yet.
+
+The palace becomes a stage.
+
+Jebat
+
+What is loyalty without justice?
+
+Tuah
+
+Justice cannot survive without order.
+
+Jebat
+
+Order built on fear is no kingdom.
+
+Tuah
+
+Then what remains?
+
+Jebat
+
+Conscience.
+
+Long pause.
+
+Wind.
+
+Torch extinguishes.
+
+Player hears heartbeat.
+
+Music slowly rises.
+
+Gameplay B
+The Duel
+
+Duration
+
+3 minutes
+
+Instead of controlling Tuah,
+
+Player becomes an invisible stagehand.
+
+Mechanic 1
+
+Strike Rhythm
+
+Each sword clash produces glowing timing circles.
+
+Player beats ceremonial drums.
+
+Correct timing
+
+clash louder
+animation smoother
+emotional intensity rises
+
+Poor timing
+
+slower duel
+awkward pauses
+
+Mechanic 2
+
+Lighting
+
+Player can relight extinguished palace torches.
+
+Darkness changes mood.
+
+Mechanic 3
+
+Gamelan
+
+Player rings hanging bronze instruments.
+
+Music dynamically follows combat.
+
+Mechanic 4
+
+Court Reaction
+
+Player looks at ministers.
+
+Their fear spreads.
+
+Audio changes.
+
+Breathing.
+
+Whispers.
+
+None of these alter history.
+
+Only presentation.
+
+Like a theatre lighting operator.
+
+Scene iii
+
+Combat ends.
+
+Jebat falls.
+
+Silence.
+
+Rain.
+
+Tuah kneels.
+
+No triumph.
+
+Jebat
+
+Tell me...
+
+Did I betray the Sultan...
+
+or save his kingdom?
+
+Silence.
+
+Tuah cannot answer.
+
+Jebat dies.
+
+The palace slowly empties.
+
+Only player remains.
+
+Rain continues.
+
+A servant wipes blood from the floor.
+
+Final narration
+
+Kingdoms remember victories.
+
+People remember grief.
+
+Fade to black.
+
+Visual Style
+
+Inspired by
+
+traditional Malay palace architecture
+candlelit historical drama
+stage theatre blocking
+minimalist environmental storytelling
+
+Lighting should resemble an indoor theatrical production:
+
+warm torchlight
+moonlight through carved windows
+volumetric dust
+soft smoke
+polished timber reflections
+Interaction Philosophy
+
+The player never changes history.
+
+Instead, they become part of the performance.
+
+Their role is to:
+
+witness
+illuminate
+accompany
+amplify
+
+This mirrors the role of a theatre stage crew or a wayang kulit audience, where participation shapes the experience without rewriting the story.
+
+Three.js XR Technical Scope
+
+This concept is intentionally achievable as a compact vertical slice using modern WebXR.
+
+Environment
+
+Single palace interior with baked global illumination and dynamic torch lights.
+One continuous scene graph (no loading transitions).
+
+Characters
+
+Two animated skeletal characters (Hang Tuah and Hang Jebat).
+Background NPCs (guards and ministers) with idle animation loops.
+
+Interaction
+
+XR controller raycasting for examining objects.
+Trigger volumes to advance dialogue.
+Rhythm interaction synchronized with sword impacts.
+Torch-light interaction using grab or touch mechanics.
+Spatial audio for dialogue, rain, thunder, and percussion.
+
+Timeline Structure
+
+Scene i
+  ↓
+Dialogue Timeline
+  ↓
+Gameplay A
+  ↓
+Dialogue Timeline
+  ↓
+Gameplay B
+  ↓
+Final Timeline
+
+Everything unfolds in a single uninterrupted take, emphasizing presence and theatricality. Rather than treating the Hang Tuah–Hang Jebat duel as an action game, this design frames it as a living stage performance where the player acts as the unseen witness whose attention, rhythm, and interaction shape the emotional experience without altering the historical outcome.
