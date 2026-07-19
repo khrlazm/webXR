@@ -208,7 +208,7 @@ const AudioEngine = (() => {
     const cf=AC.createBiquadFilter(); cf.type='bandpass'; cf.frequency.value=4200; cf.Q.value=18;
     cricketGain=AC.createGain(); cricketGain.gain.value=0;
     const lfo=AC.createOscillator(); lfo.frequency.value=13;
-    const lg=AC.createGain(); lg.gain.value=.5; lfo.connect(lg).connect(cricketGain.gain); lfo.start();
+    const lg=AC.createGain(); lg.gain.value=.004; lfo.connect(lg).connect(cricketGain.gain); lfo.start();
     cs.connect(cf).connect(cricketGain).connect(master); cs.start();
 
     /* whispers of the court */
@@ -216,7 +216,7 @@ const AudioEngine = (() => {
     const wf=AC.createBiquadFilter(); wf.type='bandpass'; wf.frequency.value=1600; wf.Q.value=2.2;
     whisperGain=AC.createGain(); whisperGain.gain.value=0;
     const wl=AC.createOscillator(); wl.frequency.value=2.1;
-    const wlg=AC.createGain(); wlg.gain.value=.6; wl.connect(wlg).connect(whisperGain.gain); wl.start();
+    const wlg=AC.createGain(); wlg.gain.value=.04; wl.connect(wlg).connect(whisperGain.gain); wl.start();
     ws.connect(wf).connect(whisperGain).connect(master); ws.start();
 
     /* heartbeat */
@@ -443,29 +443,50 @@ function buildPalace(){
   const carpet = new THREE.Mesh(new THREE.PlaneGeometry(2.4, D-4), M.carpet);
   carpet.rotation.x=-Math.PI/2; carpet.position.y=.012; carpet.position.z=.6; g.add(carpet);
 
-  /* walls with window bands */
+  /* walls — real cut openings for windows + doorway (ShapeGeometry with holes) */
   const mkWall=(w,h)=>new THREE.Mesh(new THREE.PlaneGeometry(w,h), M.woodDark);
+  const mkWallHoles=(w,h,holes)=>{ /* holes: [cx,cy,hw,hh] in wall-centred coords */
+    const sh=new THREE.Shape();
+    sh.moveTo(-w/2,-h/2); sh.lineTo(w/2,-h/2); sh.lineTo(w/2,h/2); sh.lineTo(-w/2,h/2); sh.closePath();
+    for(const [cx,cy,hw,hh] of holes){
+      const p=new THREE.Path();
+      p.moveTo(cx-hw/2,cy-hh/2); p.lineTo(cx+hw/2,cy-hh/2);
+      p.lineTo(cx+hw/2,cy+hh/2); p.lineTo(cx-hw/2,cy+hh/2); p.closePath();
+      sh.holes.push(p);
+    }
+    const geo=new THREE.ShapeGeometry(sh);
+    /* ShapeGeometry UVs are in local units — remap to 0..1 so wood tiling matches the other walls */
+    const pos=geo.attributes.position, uv=geo.attributes.uv;
+    for(let i=0;i<uv.count;i++) uv.setXY(i,(pos.getX(i)+w/2)/w,(pos.getY(i)+h/2)/h);
+    return new THREE.Mesh(geo, M.woodDark);
+  };
   const back=mkWall(W,H); back.position.set(0,H/2,-D/2); g.add(back);
-  const sideW=(W-3.4)/2;
-  for(const sx of [-1,1]){
-    const fw=mkWall(sideW,H); fw.position.set(sx*(3.4/2+sideW/2),H/2,D/2); fw.rotation.y=Math.PI; g.add(fw);
-  }
-  const lintel=mkWall(3.4,H-4.9); lintel.position.set(0,4.9+(H-4.9)/2,D/2); lintel.rotation.y=Math.PI; g.add(lintel);
-  const left=mkWall(D,H); left.rotation.y=Math.PI/2; left.position.set(-W/2,H/2,0); g.add(left);
-  const right=mkWall(D,H); right.rotation.y=-Math.PI/2; right.position.set(W/2,H/2,0); g.add(right);
+  /* long walls: five 2.2m x 2.6m window openings each, centred 3.4m up */
+  const winHoles=[]; for(let i=0;i<5;i++) winHoles.push([-9+i*4.5, 3.4-H/2, 2.2, 2.6]);
+  const left=mkWallHoles(D,H,winHoles); left.rotation.y=Math.PI/2; left.position.set(-W/2,H/2,0); g.add(left);
+  const right=mkWallHoles(D,H,winHoles); right.rotation.y=-Math.PI/2; right.position.set(W/2,H/2,0); g.add(right);
+  /* entrance wall: one true doorway opening, 3.4m wide x 4.9m tall from the floor */
+  const front=mkWallHoles(W,H,[[0,(4.9/2)-H/2,3.4,4.9]]);
+  front.rotation.y=Math.PI; front.position.set(0,H/2,D/2); g.add(front);
 
-  /* carved window screens + night glow behind (both long walls) */
+  /* carved screens set into the wall openings; night sky visible behind them */
   for(let side of [-1,1]){
     for(let i=0;i<5;i++){
       const z=-9+i*4.5;
       const win=new THREE.Group();
-      const glow=new THREE.Mesh(new THREE.PlaneGeometry(2.2,2.6), M.night.clone());
-      glow.position.x = side*(-.06);
+      /* night backdrop just outside the wall, oversized to cover the opening at any angle */
+      const glow=new THREE.Mesh(new THREE.PlaneGeometry(2.9,3.3), M.night.clone());
+      glow.position.z=-.24;
+      /* lattice sits in the plane of the opening */
       const lat=new THREE.Mesh(new THREE.PlaneGeometry(2.2,2.6), M.screen);
-      const frame=new THREE.Mesh(new THREE.BoxGeometry(2.5,2.9,.12), M.wood);
-      frame.position.x=side*(.02);
+      lat.position.z=.01;
+      /* hollow frame around the cut edge (two jambs + sill + header) */
+      const frame=new THREE.Group();
+      const jambGeo=new THREE.BoxGeometry(.16,2.92,.16), barGeo=new THREE.BoxGeometry(2.52,.16,.16);
+      for(const fx of [-1.18,1.18]){ const m=new THREE.Mesh(jambGeo,M.wood); m.position.x=fx; frame.add(m); }
+      for(const fy of [-1.38,1.38]){ const m=new THREE.Mesh(barGeo,M.wood); m.position.y=fy; frame.add(m); }
       win.add(frame,glow,lat);
-      win.position.set(side*(W/2-.07), 3.4, z);
+      win.position.set(side*(W/2), 3.4, z);
       win.rotation.y = side>0 ? -Math.PI/2 : Math.PI/2;
       g.add(win); world.windows.push(glow);
     }
@@ -501,19 +522,23 @@ function buildPalace(){
   dais.position.set(0,0,-D/2+2.4); g.add(dais);
   props.throne=throne; props.dais=dais;
 
-  /* ---- palace doors (entrance, +z) ---- */
+  /* ---- palace doors (entrance, +z) — panels sized to fill the 3.4 x 4.9 opening ---- */
   props.doors=[];
   for(let s of [-1,1]){
-    const pivot=new THREE.Group(); pivot.position.set(s*1.3,0,D/2-.15);
-    const door=new THREE.Mesh(new THREE.BoxGeometry(1.28,4.4,.14),M.wood);
-    door.position.set(-s*.64,2.2,0);
-    const trim=new THREE.Mesh(new THREE.BoxGeometry(1.1,4.2,.02),M.goldDim); trim.position.set(-s*.64,2.2,.08);
+    const pivot=new THREE.Group(); pivot.position.set(s*1.7,0,D/2-.15);
+    const door=new THREE.Mesh(new THREE.BoxGeometry(1.74,4.92,.14),M.wood);
+    door.position.set(-s*.87,2.46,0);
+    const trim=new THREE.Mesh(new THREE.BoxGeometry(1.5,4.7,.02),M.goldDim); trim.position.set(-s*.87,2.46,.08);
     pivot.add(door,trim); g.add(pivot); props.doors.push(pivot);
   }
-  const doorFrame=new THREE.Mesh(new THREE.BoxGeometry(3.4,4.9,.5),M.woodDark);
-  doorFrame.position.set(0,2.45,D/2+.05); g.add(doorFrame);
-  const beyond=new THREE.Mesh(new THREE.PlaneGeometry(3,4.5), new THREE.MeshBasicMaterial({color:0x142033}));
-  beyond.position.set(0,2.2,D/2+.4); beyond.rotation.y=Math.PI; g.add(beyond);
+  /* hollow door frame hugging the cut edge of the opening (jambs + lintel beam) */
+  const jambGeo=new THREE.BoxGeometry(.3,5.2,.5);
+  for(const jx of [-1.85,1.85]){ const j=new THREE.Mesh(jambGeo,M.woodDark); j.position.set(jx,2.6,D/2+.05); g.add(j); }
+  const lintelBeam=new THREE.Mesh(new THREE.BoxGeometry(4.0,.3,.5),M.woodDark);
+  lintelBeam.position.set(0,5.05,D/2+.05); g.add(lintelBeam);
+  /* night beyond the open doors, oversized to fill the doorway from any angle */
+  const beyond=new THREE.Mesh(new THREE.PlaneGeometry(4.6,5.6), new THREE.MeshBasicMaterial({color:0x0a1120}));
+  beyond.position.set(0,2.6,D/2+.7); beyond.rotation.y=Math.PI; g.add(beyond);
 
   /* ---- torches on pillars ---- */
   const flameTex = canvasTex((g,w,h)=>{
@@ -529,7 +554,7 @@ function buildPalace(){
     const cup=new THREE.Mesh(new THREE.CylinderGeometry(.11,.07,.16,8),M.goldDim); cup.position.set(.34,.16,0); t.add(cup);
     const flame=new THREE.Sprite(new THREE.SpriteMaterial({map:flameTex,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));
     flame.scale.set(.42,.62,1); flame.position.set(.34,.42,0); t.add(flame);
-    const light=new THREE.PointLight(0xff9a3c, 1.15, 9, 2); light.position.set(.34,.5,0); t.add(light);
+    const light=new THREE.PointLight(0xff9a3c, 1.15, 7, 2); light.position.set(.34,.5,0); t.add(light);
     t.position.set(x,2.3,z); t.rotation.y=ry;
     scene.add(t);
     const torch={group:t,flame,light,lit:true,base:1.15,seed:Math.random()*10};
@@ -576,8 +601,16 @@ function buildPalace(){
     const ringMat=new THREE.MeshBasicMaterial({color:0xecd08a,transparent:true,opacity:0,side:THREE.DoubleSide});
     const ring=new THREE.Mesh(new THREE.RingGeometry(.4,.46,32),ringMat);
     ring.rotation.x=-Math.PI/2; ring.position.y=.86; d.add(ring);
+    /* small falling puck: descends onto the skin, landing exactly on the beat */
+    const puckMat=new THREE.MeshBasicMaterial({color:0xffe9b0,transparent:true,opacity:0,side:THREE.DoubleSide,depthWrite:false});
+    const puck=new THREE.Mesh(new THREE.CircleGeometry(.13,24),puckMat);
+    puck.rotation.x=-Math.PI/2; puck.position.y=1.75; d.add(puck);
+    /* generous invisible hit target — renders nothing, catches rays */
+    const hitProxy=new THREE.Mesh(new THREE.CylinderGeometry(.6,.6,1.3,10),
+      new THREE.MeshBasicMaterial({transparent:true,opacity:0,depthWrite:false,colorWrite:false}));
+    hitProxy.position.y=.65; d.add(hitProxy);
     d.position.set(s*1.1,0,4.4); d.visible=false; scene.add(d);
-    props.drums.push({group:d, skin, ring, ringMat, side:s});
+    props.drums.push({group:d, skin, ring, ringMat, puck, puckMat, side:s});
   }
   props.gongs=[];
   {
@@ -722,9 +755,9 @@ function initThree(){
   camera.position.set(0,1.6,0);
   scene.add(rig);
 
-  hemi=new THREE.HemisphereLight(0x3a2f22,0x0a0503,.35); scene.add(hemi);
-  moon=new THREE.DirectionalLight(0x5a6fa0,.22); moon.position.set(-8,10,-4); scene.add(moon);
-  keyLight=new THREE.PointLight(0xffb56b,.5,18,2); keyLight.position.set(0,5.4,-2); scene.add(keyLight);
+  hemi=new THREE.HemisphereLight(0x3a2f22,0x0a0503,.05); scene.add(hemi);
+  moon=new THREE.DirectionalLight(0x5a6fa0,.13); moon.position.set(-8,10,-4); scene.add(moon);
+  keyLight=new THREE.PointLight(0xffb56b,.10,18,2); keyLight.position.set(0,5.4,-2); scene.add(keyLight);
   /* only 2 shadow-casting torches, per mobile-VR budget */
 }
 function enableTorchShadows(){
@@ -749,13 +782,13 @@ function initDesktopControls(){
   });
   addEventListener('mouseup',()=>{
     if(!mDrag) return;
-    if(mDrag.moved<6 && !pointerLocked && state!==STATE.TITLE) interactFromCamera();
+    if(mDrag.moved<10 && !pointerLocked && state!==STATE.TITLE) interactFromPointer(mDrag.x,mDrag.y);
     mDrag=null;
   });
   /* optional pointer lock on double-click, if the environment allows it */
   renderer.domElement.addEventListener('dblclick',()=>{
     if(xrMode||state===STATE.TITLE||pointerLocked) return;
-    try{ renderer.domElement.requestPointerLock(); }catch(e){}
+    try{ const plp=renderer.domElement.requestPointerLock(); if(plp&&plp.catch) plp.catch(()=>{}); }catch(e){}
   });
   renderer.domElement.addEventListener('click',()=>{
     if(pointerLocked && state!==STATE.TITLE) interactFromCamera();
@@ -773,7 +806,7 @@ function initDesktopControls(){
   },{passive:true});
   renderer.domElement.addEventListener('touchend',()=>{
     if(!tS) return;
-    if(performance.now()-tS.t<300 && tS.moved<14 && state!==STATE.TITLE) interactFromCamera();
+    if(performance.now()-tS.t<350 && tS.moved<22 && state!==STATE.TITLE) interactFromPointer(tS.x,tS.y);
     tS=null;
   });
   addEventListener('mousemove',e=>{
@@ -872,6 +905,15 @@ function interactFromCamera(){
   const org=new THREE.Vector3(); camera.getWorldPosition(org);
   const it=doRay(org,dir); if(it) it.onHit();
 }
+/* raycast from the actual cursor/tap position; fall back to the crosshair */
+function interactFromPointer(cx,cy){
+  const r=renderer.domElement.getBoundingClientRect();
+  const nd=new THREE.Vector2(((cx-r.left)/r.width)*2-1, -((cy-r.top)/r.height)*2+1);
+  raycaster.setFromCamera(nd,camera); raycaster.far=16;
+  const hits=raycaster.intersectObjects(collectHitMeshes(),false);
+  const it=hits.length?hits[0].object.userData.owner:null;
+  if(it) it.onHit(); else interactFromCamera();
+}
 function interactFromController(c){
   tmpMat.identity().extractRotation(c.matrixWorld);
   const org=new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
@@ -896,11 +938,11 @@ function lightning(){
   world.windows.forEach(w=>{ const c=w.material.color; const o=c.getHex();
     c.setHex(0x9fb6e8); setTimeout(()=>c.setHex(o), 120+Math.random()*160); });
   moon.intensity=.6; setTimeout(()=>moon.intensity=.22, 200);
-  setTimeout(()=>A.thunder(.5+Math.random()*.6), 400+Math.random()*1200);
+  setTimeout(()=>A.thunder(.45+Math.random()*.5), 400+Math.random()*1200);
 }
 let ambientTimers=[];
 function startAmbience(){
-  A.setRain(.10); A.setCrickets(.015);
+  A.setRain(.008); A.setCrickets(.003);
   ambientTimers.push(setInterval(()=>{ if(Math.random()<.5) lightning(); }, 9000));
   ambientTimers.push(setInterval(()=>{ if(Math.random()<.4) A.creak(); }, 7000));
 }
@@ -1002,6 +1044,28 @@ function playGameA(){
   buildHotspots();
 }
 let hotspotGlow=[];
+/* stage spots — colour symbolism for each relic the hall remembers:
+   gold = daulat/duty (Tuah)   crimson = blood-bought justice (Jebat)
+   violet = hidden majesty (throne)   cold blue = grief/death (blood) */
+const HOTSPOT_LIGHT={ kt:0xffc766, kj:0xff4a3c, th:0xb886ff, bl:0x7fb2d9 };
+let hotspotSpots=[];
+function spotlightOn(key, target, aimY){
+  const p=target.getWorldPosition?target.getWorldPosition(new THREE.Vector3()):target.position.clone();
+  p.y=aimY;
+  const sl=new THREE.SpotLight(HOTSPOT_LIGHT[key]||0xffffff, 0, 10, .5, .65, 1.8);
+  sl.position.set(p.x*.82, p.y+3.4, p.z+1.5);
+  sl.target.position.copy(p);
+  scene.add(sl.target); scene.add(sl);
+  hotspotSpots.push(sl);
+  /* theatrical snap-on: flare bright, then settle into a lingering glow */
+  gsap.to(sl,{intensity:3.4,duration:.6,ease:'power2.out'});
+  gsap.to(sl,{intensity:1.2,duration:1.8,delay:2.8,ease:'power1.inOut'});
+}
+function fadeHotspotSpots(dur=1.4){
+  hotspotSpots.forEach(sl=>gsap.to(sl,{intensity:0,duration:dur,
+    onComplete:()=>{ scene.remove(sl.target); scene.remove(sl); }}));
+  hotspotSpots=[];
+}
 function markHotspot(target, radius=.6, y=1){
   const halo=new THREE.Mesh(new THREE.SphereGeometry(radius,16,16),
     new THREE.MeshBasicMaterial({color:0xecd08a,transparent:true,opacity:.06,blending:THREE.AdditiveBlending,depthWrite:false}));
@@ -1017,6 +1081,7 @@ function buildHotspots(){
     const it=addInteractable(mesh,async()=>{
       if(seen.has(key))return; seen.add(key);
       it.active=false; gsap.to(halo.material,{opacity:0,duration:1,onComplete:()=>scene.remove(halo)});
+      spotlightOn(key, mesh, haloY);
       hotspotsSeen++;
       hotspotCount.innerHTML=`Examined <b style="color:var(--gold-hi)">${hotspotsSeen} / ${HOTSPOT_TOTAL}</b>`;
       vrBoardCache.extra=`Examined ${hotspotsSeen} / ${HOTSPOT_TOTAL}`; vrPushBoard();
@@ -1040,6 +1105,7 @@ function buildHotspots(){
 }
 async function endGameA(){
   interactables.length=0;
+  fadeHotspotSpots(1.4);
   cross.classList.add('hidden');
   blackout.style.transition='opacity 1s ease'; blackout.style.opacity=.85;
   if(typeof vrUI!=='undefined') vrUI.fade(.85,1);
@@ -1071,9 +1137,9 @@ async function playSceneII(){
   await say('Hang Jebat','Conscience.',3.4);
   /* long pause. wind. a torch dies. */
   await wait(2.2);
-  A.setRain(.16);
-  gsap.to(hemi,{intensity:.12,duration:3});
-  gsap.to(keyLight,{intensity:.15,duration:3});
+  A.setRain(.014);
+  gsap.to(hemi,{intensity:.015,duration:3});
+  gsap.to(keyLight,{intensity:.03,duration:3});
   /* kill two torches near the duel */
   const near=world.torches.filter(t=>Math.abs(t.group.position.z+2)<3).slice(0,2);
   near.forEach((t,i)=>setTimeout(()=>{extinguish(t); A.creak();}, 600+i*900));
@@ -1162,10 +1228,14 @@ let pendingWindow=null;
 function performClash(){
   duelBeat++;
   const d=props.drums[duelBeat%2];
-  /* cue ring 1.15s before impact */
-  const ringT=1.15;
+  /* cue lead shrinks as intensity rises: 1.35s cold -> ~0.9s at full heat */
+  const ringT=1.35 - intensity*.45;
   d.ringMat.opacity=.9; d.ring.scale.set(2.6,2.6,1);
   gsap.to(d.ring.scale,{x:1,y:1,duration:ringT,ease:'none'});
+  d.puckMat.opacity=.95; d.puck.position.y=1.75; d.puck.scale.set(1,1,1);
+  gsap.to(d.puck.position,{y:.87,duration:ringT,ease:'none',
+    onComplete:()=>{ gsap.to(d.puck.scale,{x:2.2,y:2.2,duration:.18});
+      gsap.to(d.puckMat,{opacity:0,duration:.18}); }});
   pendingWindow={drum:d, impact:performance.now()+ringT*1000, hit:false, judged:false};
   /* choreography */
   const T=chars.tuah, J=chars.jebat;
@@ -1175,29 +1245,37 @@ function performClash(){
   gsap.to(defender.arms[1].rotation,{x:-1.6,z:.5,duration:ringT*.55});
   setTimeout(()=>{
     /* impact */
-    const good=pendingWindow&&pendingWindow.hit;
+    const pw=pendingWindow;
+    const good=pw&&pw.hit;
     const amp=good?intensity:intensity*.4;
     A.clash(.3+amp*.7, 0);
     sparkAt(new THREE.Vector3(0,1.35,-2), .5+amp);
-    if(!good&&pendingWindow&&!pendingWindow.judged){ judge('· ·', false); bumpIntensity(-.05); }
-    pendingWindow=null;
     d.ringMat.opacity=0;
-    /* recover */
-    gsap.to(attacker.arms[1].rotation,{x:-.7,z:0,duration:.5,delay:.1});
-    gsap.to(defender.arms[1].rotation,{x:-.7,z:0,duration:.5,delay:.1});
-    gsap.to(attacker.position,{x:attacker===T?-1.2:1.2,z:-2+(Math.random()-.5),duration:.9,delay:.15,ease:'power2.out'});
-    gsap.to(defender.position,{x:defender===T?-1.2:1.2,z:-2+(Math.random()-.5),duration:.9,delay:.15,ease:'power2.out'});
+    gsap.to(d.puckMat,{opacity:0,duration:.15,overwrite:'auto'});
+    /* hang time: keep the window open past the clash so slightly-late hits
+       still register as SEIRAMA; only judge a miss after the grace expires */
+    if(pw&&!pw.hit){
+      setTimeout(()=>{ if(pendingWindow===pw){
+        if(!pw.judged){ judge('· ·', false); bumpIntensity(-.05); }
+        pendingWindow=null; } }, 450);
+    } else pendingWindow=null;
+    /* recover — snappier as the duel heats up */
+    const rec=1 - intensity*.4;
+    gsap.to(attacker.arms[1].rotation,{x:-.7,z:0,duration:.5*rec,delay:.1*rec});
+    gsap.to(defender.arms[1].rotation,{x:-.7,z:0,duration:.5*rec,delay:.1*rec});
+    gsap.to(attacker.position,{x:attacker===T?-1.2:1.2,z:-2+(Math.random()-.5),duration:.9*rec,delay:.15*rec,ease:'power2.out'});
+    gsap.to(defender.position,{x:defender===T?-1.2:1.2,z:-2+(Math.random()-.5),duration:.9*rec,delay:.15*rec,ease:'power2.out'});
     T.rotation.y=Math.atan2(J.position.x-T.position.x,J.position.z-T.position.z);
     J.rotation.y=Math.atan2(T.position.x-J.position.x,T.position.z-J.position.z);
     if(duelBeat>=DUEL_BEATS){ duelRunning=false; setTimeout(playSceneIII, 2000); }
-    else scheduleNextClash(1.6 + Math.random()*1.6 - intensity*.6);
+    else scheduleNextClash(1.9 - intensity*1.1 + Math.random()*(1.4 - intensity*.8));
   }, ringT*1000);
 }
 function drumHit(d){
   gsap.fromTo(d.skin.position,{y:.78},{y:.81,duration:.3,ease:'elastic.out(2,.3)'});
-  if(pendingWindow && pendingWindow.drum===d && !pendingWindow.hit){
+  if(pendingWindow && !pendingWindow.hit){
     const err=Math.abs(performance.now()-pendingWindow.impact);
-    if(err<260){
+    if(err<400){
       pendingWindow.hit=true; pendingWindow.judged=true;
       A.drum(true); judge('SEIRAMA', true); bumpIntensity(.07);
       A.setMusic(Math.min(.9,.3+intensity*.7));
@@ -1260,7 +1338,7 @@ async function playSceneIII(){
   nb.rotation.x=-Math.PI/2; nb.position.set(J.position.x,.016,J.position.z); scene.add(nb);
   gsap.to(nb.scale,{x:70,y:55,duration:14,ease:'power1.out'});
   await wait(2.5);
-  A.setRain(.2);
+  A.setRain(.018);
   /* Tuah kneels. No triumph. */
   gsap.to(T.arms[1].rotation,{x:0,duration:1});
   gsap.to(T.hips.position,{y:.52,duration:2,ease:'power2.inOut'});
@@ -1304,7 +1382,7 @@ async function playSceneIII(){
   gsap.to(keyLight,{intensity:0,duration:10});
   await say('','Kingdoms remember victories.',4.4);
   await say('','People remember grief.',4.6);
-  A.setRain(.05); A.setCrickets(0);
+  A.setRain(.005); A.setCrickets(0);
   blackout.style.opacity=1;
   if(typeof vrUI!=='undefined') vrUI.fade(1,2.5);
   await wait(2.5);
