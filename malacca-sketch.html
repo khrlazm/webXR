@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Malacca 1511 — VR Sketch (Quest test build)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a130b; }
+  #hud {
+    position: absolute; top: 12px; left: 14px; color: #e8d9b0;
+    font: 13px/1.5 Georgia, serif; letter-spacing: .04em; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,.6);
+  }
+  #hud b { color: #f4e6bf; font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <b>The Capture of Malacca — sketch build</b><br>
+  Kampung Upeh · the river · the bridge · the hill<br>
+  Desktop: drag to orbit, scroll to zoom.<br>
+  Quest: left stick flies where you look · right stick snap-turns ·
+  squeeze both grips to stretch / shrink / carry the diorama.
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/build/index.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MeshBVH } from 'three-mesh-bvh';
+import { FontLoader } from 'three/addons/loaders/FontLoader.js';
+import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+
+// ================================================================ palette
+const PAL = {
+  skyTop:      new THREE.Color('#3e6a8a'),
+  skyHorizon:  new THREE.Color('#e8b96a'),
+  sunGlow:     new THREE.Color('#ffdf9e'),
+  sunLight:    new THREE.Color('#ffd9a0'),
+  ambient:     new THREE.Color('#6a7fa0'),
+  seaDeep:     new THREE.Color('#274f63'),
+  seaShallow:  new THREE.Color('#48857c'),
+  seaShoal:    new THREE.Color('#8dbda0'),
+  seaFoam:     new THREE.Color('#f2ead2'),
+  cloudLit:    new THREE.Color('#fdf3dd'),
+  cloudShade:  new THREE.Color('#b39a86'),
+  cloudRim:    new THREE.Color('#ffd77e'),
+  landSand:    new THREE.Color('#cdb27e'),
+  landParch:   new THREE.Color('#d8c294'),
+  landHill:    new THREE.Color('#c8ab76'),
+  forest:      new THREE.Color('#71904e'),
+  treeGreen:   new THREE.Color('#5c7d42'),
+  wallStone:   new THREE.Color('#b7a077'),
+  gateOchre:   new THREE.Color('#d08a4a'),
+  roofClay:    new THREE.Color('#9c5b3c'),
+  kampungRed:  new THREE.Color('#a13a2c'),
+  hullWood:    new THREE.Color('#6d4a2f'),
+  sailCloth:   new THREE.Color('#efe3c2'),
+  bridgeWood:  new THREE.Color('#8a6236'),
+  pedestal:    new THREE.Color('#54402c'),
+  brass:       new THREE.Color('#b08d4f'),
+  shaftGold:   new THREE.Color('#ffcf87')
+};
+
+const SUN_DIR = new THREE.Vector3(-0.55, 0.42, -0.35).normalize();
+const DIORAMA_POS = new THREE.Vector3(0, 0, -7);
+const K = 1.4;                       // landmass scale-up factor
+const TERRAIN_SIZE = 48;
+const PEDESTAL_R = 23.7;             // circular cut radius (diorama-local)
+const BAKE_HALF = 26;                // top-down bakes cover [-26, 26]
+
+// ================================================================ renderer
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.xr.enabled = true;
+renderer.xr.setFoveation(1);
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(PAL.skyHorizon.clone().lerp(PAL.skyTop, 0.35), 26, 95);
+
+// Everything grabbable/scaleable lives under `world`; sky, sun and player stay out.
+const world = new THREE.Group();
+scene.add(world);
+
+const player = new THREE.Group();
+player.position.set(-12, 0.5, 12);
+scene.add(player);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 260);
+camera.position.set(0, 1.6, 0);
+player.add(camera);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(4, 0.5, -12);
+controls.enableDamping = true;
+controls.maxDistance = 60;
+
+// ================================================================ sky dome
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uSunDir:  { value: SUN_DIR },
+    uTop:     { value: PAL.skyTop },
+    uHorizon: { value: PAL.skyHorizon },
+    uGlow:    { value: PAL.sunGlow }
+  },
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  vertexShader: `
+    varying vec3 vDir;
+    void main() {
+      vDir = normalize(position);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 uSunDir, uTop, uHorizon, uGlow;
+    varying vec3 vDir;
+    void main() {
+      float h = clamp(vDir.y, 0.0, 1.0);
+      vec3 col = mix(uHorizon, uTop, pow(h, 0.55));
+      col *= 1.0 + 0.025 * sin(vDir.y * 40.0);
+      float s = clamp(dot(normalize(vDir), uSunDir), 0.0, 1.0);
+      col += uGlow * (pow(s, 6.0) * 0.35 + pow(s, 90.0) * 1.6 + step(0.9995, s) * 3.0);
+      gl_FragColor = vec4(col, 1.0);
+    }`
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 20), skyMat);
+scene.add(sky);
+
+{ // PMREM environment from the sky alone
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene();
+  envScene.add(sky.clone());
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  scene.environmentIntensity = 0.55;
+  pmrem.dispose();
+}
+
+// ================================================================ sun
+const sun = new THREE.DirectionalLight(PAL.sunLight, 2.6);
+sun.position.copy(SUN_DIR).multiplyScalar(46);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+const sc = sun.shadow.camera;
+sc.left = -27; sc.right = 27; sc.top = 27; sc.bottom = -27; sc.near = 12; sc.far = 90;
+sun.shadow.bias = -0.0004;
+scene.add(sun, sun.target);
+sun.target.position.copy(DIORAMA_POS);
+scene.add(new THREE.AmbientLight(PAL.ambient, 0.25));
+
+// ================================================================ geography
+// Diorama-local coords, X = east, Z = south, scaled up by K from the map layout:
+// strait west, river from the NE to its mouth, Kampung Upeh on the NW bank,
+// the bridge at the mouth, the istana / A Famosa hill on the SE bank.
+const kk = pts => pts.map(p => p.map(v => v * K));
+const RIVER = kk([
+  [11, -15], [7.5, -11], [5.5, -7], [4.2, -3.5],
+  [3.0, -0.5], [1.6, 1.6], [-1.5, 2.8], [-5, 3.4], [-9, 4.2]
+]);
+const HILL = { x: 2.6 * K, z: 5.2 * K, height: 1.6, radius: 2.3 * K };
+const CITY_WALL = kk([
+  [-4.6, -11.0], [1.8, -12.8], [4.0, -7.0], [2.6, -1.8], [-0.8, 1.6], [-4.2, 0.4]
+]);
+const FORESTS = kk([
+  [9, -9.5, 2.2], [10, -3.5, 2.4], [9.8, 2.5, 2.6], [6.8, -14, 1.6], [7.5, 7.5, 2.2]
+]);
+
+const coastX = z => (-5 + 0.18 * (z / K) + 0.6 * Math.sin(0.35 * z / K)) * K;
+
+function distToPolyline(x, z, pts) {
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    const dx = bx - ax, dz = bz - az;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+    best = Math.min(best, Math.hypot(ax + dx * t - x, az + dz * t - z));
+  }
+  return best;
+}
+function inPoly(x, z, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i], [xj, zj] = poly[j];
+    if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+
+function heightAt(x, z) {
+  const landM = smooth(0, 3.2, x - coastX(z));
+  const dRiver = distToPolyline(x, z, RIVER);
+  const carve = 1 - smooth(1.6, 3.8, dRiver);
+  const ef = 1 - smooth(20.0, 23.2, Math.hypot(x, z));     // rim dips underwater before the cut
+  const landEff = landM * (1 - carve) * ef;
+  const n = 0.06 * Math.sin(x * 0.9 + z * 1.3) * Math.sin(x * 0.5 - z * 0.7);
+  const dh = Math.hypot(x - HILL.x, z - HILL.z);
+  const hill = HILL.height * Math.exp(-(dh * dh) / (2 * HILL.radius * HILL.radius));
+  return -0.6 * (1 - landEff) + landEff * (0.45 + n + hill);
+}
+
+// ================================================================ terrain
+const terrainGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 176, 176);
+terrainGeo.rotateX(-Math.PI / 2);
+{
+  const pos = terrainGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = heightAt(x, z);
+    pos.setY(i, h);
+    c.copy(PAL.landSand).lerp(PAL.landParch, smooth(0.08, 0.32, h));
+    const dh = Math.hypot(x - HILL.x, z - HILL.z);
+    c.lerp(PAL.landHill, smooth(HILL.radius * 1.4, HILL.radius * 0.4, dh) * 0.7);
+    if (h > 0.22) for (const [fx, fz, fr] of FORESTS) {
+      const d = Math.hypot(x - fx, z - fz);
+      if (d < fr) {
+        const speck = 0.8 + 0.2 * Math.sin(x * 6.1) * Math.sin(z * 6.7);
+        c.lerp(PAL.forest, (1 - smooth(fr * 0.55, fr, d)) * 0.85 * speck);
+      }
+    }
+    const tone = 1 + 0.05 * Math.sin(x * 2.7) * Math.sin(z * 3.1);
+    colors[i * 3] = c.r * tone; colors[i * 3 + 1] = c.g * tone; colors[i * 3 + 2] = c.b * tone;
+  }
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  terrainGeo.computeVertexNormals();
+}
+const terrainMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+const terrainAO = { uGroundAO: { value: null }, uAOStrength: { value: 0.55 } };
+terrainMat.onBeforeCompile = shader => {
+  Object.assign(shader.uniforms, terrainAO);
+  shader.vertexShader = 'varying vec2 vBakeUv; varying vec2 vTerrLocal;\n' + shader.vertexShader.replace(
+    '#include <begin_vertex>',
+    `#include <begin_vertex>
+     vTerrLocal = position.xz;
+     vBakeUv = vec2(position.x / ${BAKE_HALF * 2}.0 + 0.5, 0.5 - position.z / ${BAKE_HALF * 2}.0);`);
+  shader.fragmentShader = 'uniform sampler2D uGroundAO; uniform float uAOStrength; varying vec2 vBakeUv; varying vec2 vTerrLocal;\n'
+    + shader.fragmentShader
+    .replace('#include <clipping_planes_fragment>',
+      `if (length(vTerrLocal) > ${PEDESTAL_R}) discard;   // circular pedestal cut
+       #include <clipping_planes_fragment>`)
+    .replace('#include <aomap_fragment>',
+      `#include <aomap_fragment>
+       float bakedAO = texture2D(uGroundAO, vBakeUv).r;
+       reflectedLight.indirectDiffuse *= mix(1.0, bakedAO, uAOStrength);
+       reflectedLight.directDiffuse  *= mix(1.0, bakedAO, uAOStrength * 0.6);`);
+};
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+terrain.receiveShadow = true;
+
+// ================================================================ vertex AO
+const AO_DIRS = (() => {
+  const dirs = [];
+  const N = 20, GA = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < N; i++) {
+    const y = (i + 0.5) / N;
+    const r = Math.sqrt(1 - y * y), a = GA * i;
+    dirs.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+  }
+  return dirs;
+})();
+function bakeVertexAO(geo, maxDist = 2.5, floor = 0.4) {
+  const bvh = new MeshBVH(geo);
+  const pos = geo.attributes.position, nor = geo.attributes.normal;
+  const colors = new Float32Array(pos.count * 3);
+  const p = new THREE.Vector3(), n = new THREE.Vector3(), t = new THREE.Vector3(),
+        b = new THREE.Vector3(), d = new THREE.Vector3(), ray = new THREE.Ray();
+  for (let i = 0; i < pos.count; i++) {
+    p.fromBufferAttribute(pos, i);
+    n.fromBufferAttribute(nor, i).normalize();
+    t.set(1, 0, 0); if (Math.abs(n.x) > 0.9) t.set(0, 0, 1);
+    b.crossVectors(n, t).normalize();
+    t.crossVectors(b, n);
+    let occ = 0;
+    for (const dir of AO_DIRS) {
+      d.copy(t).multiplyScalar(dir.x).addScaledVector(n, dir.y).addScaledVector(b, dir.z);
+      ray.origin.copy(p).addScaledVector(n, 0.02);
+      ray.direction.copy(d);
+      const hit = bvh.raycastFirst(ray, THREE.DoubleSide);
+      if (hit && hit.distance < maxDist) occ++;
+    }
+    const v = floor + (1 - floor) * (1 - occ / AO_DIRS.length);
+    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = v;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
+function gradientAO(geo, minY, maxY, floor = 0.72) {
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const v = floor + (1 - floor) * smooth(minY, maxY, pos.getY(i));
+    colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = v;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return geo;
+}
+
+// ================================================================ the city
+const diorama = new THREE.Group();
+diorama.position.copy(DIORAMA_POS);
+world.add(diorama);
+const occluders = new THREE.Group();
+
+const stdMat = (color, extra = {}) => new THREE.MeshStandardMaterial(
+  { color, roughness: 0.9, vertexColors: true, ...extra });
+
+// ---- walls & gates
+{
+  const wallGeo = gradientAO(new THREE.BoxGeometry(0.95, 0.55, 0.22), -0.28, 0.28);
+  const gateGeo = gradientAO(new THREE.BoxGeometry(0.42, 0.85, 0.42), -0.42, 0.42);
+  const wallMs = [], gateMs = [];
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  function wallRun(loop, yLift = 0.28) {
+    for (let i = 0; i < loop.length; i++) {
+      const [ax, az] = loop[i], [bx, bz] = loop[(i + 1) % loop.length];
+      const len = Math.hypot(bx - ax, bz - az);
+      const segs = Math.max(1, Math.round(len / 1.0));
+      const ang = Math.atan2(-(bz - az), bx - ax);
+      for (let s2 = 0; s2 < segs; s2++) {
+        const t2 = (s2 + 0.5) / segs;
+        const x = ax + (bx - ax) * t2, z = az + (bz - az) * t2;
+        e.set(0, ang, 0);
+        m.compose(new THREE.Vector3(x, heightAt(x, z) + yLift, z), q.setFromEuler(e), new THREE.Vector3(1, 1, 1));
+        wallMs.push(m.clone());
+      }
+      m.compose(new THREE.Vector3(ax, heightAt(ax, az) + 0.42, az), q.identity(), new THREE.Vector3(1, 1, 1));
+      gateMs.push(m.clone());
+    }
+  }
+  wallRun(CITY_WALL);
+  const fortWall = [];
+  for (let i = 0; i < 5; i++) {
+    const a = -Math.PI / 2 + i * Math.PI * 2 / 5;
+    fortWall.push([HILL.x + Math.cos(a) * 2.9, HILL.z + Math.sin(a) * 2.9]);
+  }
+  wallRun(fortWall);
+  const walls = new THREE.InstancedMesh(wallGeo, stdMat(PAL.wallStone), wallMs.length);
+  wallMs.forEach((mm, i) => walls.setMatrixAt(i, mm));
+  const gates = new THREE.InstancedMesh(gateGeo, stdMat(PAL.gateOchre), gateMs.length);
+  gateMs.forEach((mm, i) => gates.setMatrixAt(i, mm));
+  walls.castShadow = walls.receiveShadow = gates.castShadow = true;
+  occluders.add(walls, gates);
+}
+
+// ---- houses of Kampung Upeh — smaller, denser
+{
+  const geo = gradientAO(new THREE.BoxGeometry(1, 1, 1), -0.5, 0.5);
+  const mat = stdMat(PAL.roofClay, { roughness: 0.85 });
+  const placed = [];
+  let guard = 0;
+  while (placed.length < 260 && guard++ < 8000) {
+    const x = (-5 + Math.random() * 10) * K, z = (-13.5 + Math.random() * 16) * K;
+    if (!inPoly(x, z, CITY_WALL)) continue;
+    const h = heightAt(x, z);
+    if (h < 0.3 || distToPolyline(x, z, RIVER) < 2.6) continue;
+    placed.push({ x, z, h });
+  }
+  const houses = new THREE.InstancedMesh(geo, mat, placed.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const col = new THREE.Color();
+  placed.forEach((pt, i) => {
+    const hh = 0.16 + Math.random() * 0.3;
+    e.set(0, Math.random() * Math.PI, 0);
+    m.compose(
+      new THREE.Vector3(pt.x, pt.h + hh / 2, pt.z),
+      q.setFromEuler(e),
+      new THREE.Vector3(0.16 + Math.random() * 0.18, hh, 0.16 + Math.random() * 0.18));
+    houses.setMatrixAt(i, m);
+    col.copy(Math.random() < 0.35 ? PAL.landParch : PAL.roofClay)
+       .offsetHSL(0, 0, (Math.random() - 0.5) * 0.08);
+    houses.setColorAt(i, col);
+  });
+  houses.castShadow = houses.receiveShadow = true;
+  occluders.add(houses);
+}
+
+// ---- outlying kampung rows
+{
+  const geo = gradientAO(new THREE.BoxGeometry(1.7, 0.28, 0.44), -0.14, 0.14);
+  const spots = kk([[7, -14.5], [9.5, -13.8], [13, -13], [13.6, -8], [13.9, -4],
+                    [13.4, 0.8], [6.2, 8.8], [9.5, 9.5], [11.5, 5.5], [12.5, -10.5]]);
+  const rots = [0.4, 0.4, 0.2, 1.5, 1.6, 1.6, 0.9, 1.0, 1.2, 0.3];
+  const ok = [];
+  spots.forEach(([x, z], i) => { if (heightAt(x, z) > 0.28) ok.push([x, z, rots[i]]); });
+  const rows = new THREE.InstancedMesh(geo, stdMat(PAL.kampungRed), ok.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  ok.forEach(([x, z, rot], i) => {
+    e.set(0, rot, 0);
+    m.compose(new THREE.Vector3(x, heightAt(x, z) + 0.14, z), q.setFromEuler(e), new THREE.Vector3(1, 1, 1));
+    rows.setMatrixAt(i, m);
+  });
+  rows.castShadow = rows.receiveShadow = true;
+  occluders.add(rows);
+}
+
+// ---- forests — smaller trees, twice as many
+{
+  const canopy = new THREE.IcosahedronGeometry(0.42, 1);
+  canopy.scale(1, 0.8, 1); canopy.translate(0, 0.85, 0);
+  const trunk = new THREE.CylinderGeometry(0.05, 0.08, 0.5, 6).toNonIndexed();
+  trunk.translate(0, 0.3, 0);
+  const geo = gradientAO(mergeGeometries([trunk, canopy]), 0.1, 1.0, 0.6);
+  const placed = [];
+  let guard = 0;
+  while (placed.length < 220 && guard++ < 6000) {
+    const f = FORESTS[Math.floor(Math.random() * FORESTS.length)];
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * f[2];
+    const x = f[0] + Math.cos(a) * r, z = f[1] + Math.sin(a) * r;
+    if (heightAt(x, z) < 0.3 || distToPolyline(x, z, RIVER) < 2.5) continue;
+    placed.push({ x, z, h: heightAt(x, z) });
+  }
+  const trees = new THREE.InstancedMesh(geo, stdMat(PAL.treeGreen, { roughness: 0.95 }), placed.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const col = new THREE.Color();
+  placed.forEach((pt, i) => {
+    e.set(0, Math.random() * Math.PI, 0);
+    const s2 = 0.5 + Math.random() * 0.5;
+    m.compose(new THREE.Vector3(pt.x, pt.h, pt.z), q.setFromEuler(e), new THREE.Vector3(s2, s2, s2));
+    trees.setMatrixAt(i, m);
+    col.copy(PAL.treeGreen).offsetHSL((Math.random() - 0.5) * 0.03, 0, (Math.random() - 0.5) * 0.1);
+    trees.setColorAt(i, col);
+  });
+  trees.castShadow = true;
+  occluders.add(trees);
+}
+
+// ---- the istana on the hill
+{
+  const geo = mergeGeometries([
+    new THREE.BoxGeometry(2.4, 0.5, 2.0).translate(0, 0.25, 0),
+    new THREE.BoxGeometry(0.9, 1.1, 0.9).translate(0.4, 1.05, -0.2),
+    new THREE.ConeGeometry(0.72, 0.6, 4).rotateY(Math.PI / 4).translate(0.4, 1.9, -0.2),
+    new THREE.BoxGeometry(1.2, 0.55, 0.7).translate(-0.6, 0.77, 0.45)
+  ]);
+  bakeVertexAO(geo, 2.0);
+  const istana = new THREE.Mesh(geo, stdMat(PAL.landParch, { roughness: 0.8 }));
+  istana.position.set(HILL.x, heightAt(HILL.x, HILL.z), HILL.z);
+  istana.castShadow = istana.receiveShadow = true;
+  occluders.add(istana);
+}
+
+// ---- the mosque near the bridge, south bank
+{
+  const geo = mergeGeometries([
+    new THREE.BoxGeometry(1.3, 0.7, 1.3).translate(0, 0.35, 0),
+    new THREE.SphereGeometry(0.5, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.7, 0),
+    new THREE.CylinderGeometry(0.08, 0.11, 1.5, 10).translate(0.95, 0.75, -0.35),
+    new THREE.SphereGeometry(0.13, 10, 8).translate(0.95, 1.55, -0.35)
+  ]);
+  bakeVertexAO(geo, 2.0);
+  const mosque = new THREE.Mesh(geo, stdMat(PAL.sailCloth, { roughness: 0.55, metalness: 0.1 }));
+  const mx = 0.9 * K, mz = 3.6 * K;
+  mosque.position.set(mx, heightAt(mx, mz), mz);
+  mosque.castShadow = mosque.receiveShadow = true;
+  occluders.add( mosque);
+}
+
+// ---- THE BRIDGE — oriented from the river's actual tangent at the crossing
+{
+  const L = 6.6;                                     // deck long enough for the wider river
+  const parts = [ new THREE.BoxGeometry(L, 0.12, 0.7).translate(0, 0.42, 0) ];
+  for (let i = -2; i <= 2; i++) {
+    parts.push(new THREE.CylinderGeometry(0.05, 0.06, 0.85, 6).translate(i * 1.35, 0.05, 0.28));
+    parts.push(new THREE.CylinderGeometry(0.05, 0.06, 0.85, 6).translate(i * 1.35, 0.05, -0.28));
+  }
+  parts.push(new THREE.BoxGeometry(L, 0.06, 0.06).translate(0, 0.64, 0.3));
+  parts.push(new THREE.BoxGeometry(L, 0.06, 0.06).translate(0, 0.64, -0.3));
+  const geo = mergeGeometries(parts);
+  bakeVertexAO(geo, 1.2);
+  const bridge = new THREE.Mesh(geo, stdMat(PAL.bridgeWood, { roughness: 0.85 }));
+  const a = RIVER[4], b = RIVER[6];
+  const flow = new THREE.Vector2(b[0] - a[0], b[1] - a[1]).normalize();
+  const cross = new THREE.Vector2(-flow.y, flow.x);  // ⟂ to the flow: bank to bank
+  bridge.position.set(RIVER[5][0], 0.0, RIVER[5][1]);
+  bridge.rotation.y = Math.atan2(-cross.y, cross.x); // align deck's local X to `cross`
+  bridge.castShadow = true;
+  occluders.add(bridge);
+}
+
+// ---- jetties
+{
+  const geo = gradientAO(new THREE.BoxGeometry(3.0, 0.08, 0.4), -0.04, 0.04, 0.85);
+  const zs = [-6 * K, -3.2 * K, -0.6 * K, 2.0 * K];
+  const jetties = new THREE.InstancedMesh(geo, stdMat(PAL.bridgeWood), zs.length);
+  const m = new THREE.Matrix4();
+  zs.forEach((z, i) => {
+    m.makeTranslation(coastX(z) - 1.3, 0.12, z);
+    jetties.setMatrixAt(i, m);
+  });
+  jetties.castShadow = true;
+  occluders.add(jetties);
+}
+
+diorama.add(terrain, occluders);
+
+// ================================================================ FLOATING 3D TEXT
+const textGroup = new THREE.Group();
+diorama.add(textGroup);
+
+const fontLoader = new FontLoader();
+// Using standard clear archetype font from default CDN sources
+fontLoader.load('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+  const textMat = new THREE.MeshStandardMaterial({
+    color: PAL.brass,
+    roughness: 0.35,
+    metalness: 0.75,
+    vertexColors: true
+  });
+
+  const lines = [
+    "\"Whoever is Lord of Malacca",
+    "has his hand on the throat of Venice.\"",
+    "— Tomé Pires"
+  ];
+
+  let currentY = 0;
+  const lineSpacing = 0.55;
+
+  lines.forEach((lineText) => {
+    const textGeo = new TextGeometry(lineText, {
+      font: font,
+      size: 0.38,
+      depth: 0.06,
+      curveSegments: 4,
+      bevelEnabled: true,
+      bevelThickness: 0.02,
+      bevelSize: 0.01,
+      bevelOffset: 0,
+      bevelSegments: 2
+    });
+
+    gradientAO(textGeo, -0.1, 0.4, 0.75);
+    textGeo.center();
+
+    const lineMesh = new THREE.Mesh(textGeo, textMat);
+    lineMesh.position.y = currentY;
+    lineMesh.castShadow = true;
+    textGroup.add(lineMesh);
+
+    currentY -= lineSpacing;
+  });
+
+  // Center the layout vertically and sit comfortably over the core river/bridge scene
+  textGroup.position.set(0, 5.2, -2);
+});
+
+// ================================================================ bakes
+const bakeCam = new THREE.OrthographicCamera(-BAKE_HALF, BAKE_HALF, BAKE_HALF, -BAKE_HALF, 1, 100);
+bakeCam.position.set(0, 50, 0);
+bakeCam.up.set(0, 0, -1);
+bakeCam.lookAt(0, 0, 0);
+const bakeScene = new THREE.Scene();
+
+// Bake A — shore/height mask for the water shader
+const shoreRT = new THREE.WebGLRenderTarget(256, 256);
+{
+  bakeScene.background = new THREE.Color(0x000000);
+  const heightMat = new THREE.ShaderMaterial({
+    vertexShader: `varying float vY; void main(){ vY = position.y;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying float vY; void main(){
+      gl_FragColor = vec4(vec3(smoothstep(-0.18, 0.32, vY)), 1.0); }`
+  });
+  const proxy = new THREE.Mesh(terrainGeo, heightMat);
+  bakeScene.add(proxy);
+  renderer.setRenderTarget(shoreRT);
+  renderer.render(bakeScene, bakeCam);
+  renderer.setRenderTarget(null);
+  bakeScene.remove(proxy);
+}
+
+// Bake B — ground occlusion stamped by every structure
+const groundRT = new THREE.WebGLRenderTarget(224, 224);
+{
+  bakeScene.background = new THREE.Color(0xffffff);
+  bakeScene.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0x2e2e2e });
+  bakeScene.add(occluders);
+  renderer.setRenderTarget(groundRT);
+  renderer.render(bakeScene, bakeCam);
+  renderer.setRenderTarget(null);
+  bakeScene.overrideMaterial = null;
+  diorama.add(occluders);
+  terrainAO.uGroundAO.value = groundRT.texture;
+}
+
+// ================================================================ pedestal
+// The museum plinth: side drum, brass top rim, and a bottom cap. Added after the
+// bakes so it never stamps into the ground-occlusion texture.
+{
+  const drum = new THREE.Mesh(
+    new THREE.CylinderGeometry(PEDESTAL_R, PEDESTAL_R, 1.5, 96, 1, true),
+    new THREE.MeshStandardMaterial({ color: PAL.pedestal, roughness: 0.6, metalness: 0.25, side: THREE.DoubleSide }));
+  drum.position.y = -0.73;
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(PEDESTAL_R, 0.16, 10, 96).rotateX(-Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: PAL.brass, roughness: 0.35, metalness: 0.85 }));
+  rim.position.y = 0.0;
+  const cap = new THREE.Mesh(
+    new THREE.CircleGeometry(PEDESTAL_R, 96).rotateX(Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: PAL.pedestal, roughness: 0.7, metalness: 0.2 }));
+  cap.position.y = -1.48;
+  diorama.add(drum, rim, cap);
+}
+
+// ================================================================ water
+// A circular disc matching the pedestal cut; all bake lookups use LOCAL coords
+// so grab-scaling the world never breaks the mapping.
+const waterUniforms = {
+  uTime:     { value: 0 },
+  uDeep:     { value: PAL.seaDeep },
+  uShallow:  { value: PAL.seaShallow },
+  uShoal:    { value: PAL.seaShoal },
+  uFoam:     { value: PAL.seaFoam },
+  uSky:      { value: PAL.skyTop.clone().lerp(PAL.skyHorizon, 0.4) },
+  uSunDir:   { value: SUN_DIR },
+  uSunCol:   { value: PAL.sunGlow },
+  uShoreTex: { value: shoreRT.texture },
+  uFogColor: { value: scene.fog.color },
+  uFogNear:  { value: scene.fog.near },
+  uFogFar:   { value: scene.fog.far }
+};
+const waterMat = new THREE.ShaderMaterial({
+  uniforms: waterUniforms,
+  vertexShader: `
+    varying vec3 vWorld;
+    varying vec2 vLocal;
+    void main() {
+      vLocal = position.xy;              // circle plane: x → local X, y → local -Z
+      vec4 w = modelMatrix * vec4(position, 1.0);
+      vWorld = w.xyz;
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }`,
+  fragmentShader: `
+    uniform float uTime, uFogNear, uFogFar;
+    uniform vec3 uDeep, uShallow, uShoal, uFoam, uSky, uSunDir, uSunCol, uFogColor;
+    uniform sampler2D uShoreTex;
+    varying vec3 vWorld;
+    varying vec2 vLocal;
+
+    float wH(vec2 p, float t) {
+      return sin(dot(p, vec2( 0.86, 0.50)) * 0.55 + t * 0.90)
+           + 0.55 * sin(dot(p, vec2(-0.62, 0.79)) * 1.10 + t * 1.30)
+           + 0.30 * sin(dot(p, vec2( 0.20,-0.98)) * 2.10 + t * 1.90);
+    }
+    float cloudShadow(vec2 p, float t) {
+      float n = sin(p.x * 0.14 + t * 0.03) * sin(p.y * 0.11 - t * 0.02)
+              + 0.6 * sin(p.x * 0.31 - t * 0.04 + p.y * 0.17);
+      return smoothstep(0.15, 0.9, n);
+    }
+    void main() {
+      vec2 suv = vec2(vLocal.x / ${BAKE_HALF * 2}.0 + 0.5, 0.5 + vLocal.y / ${BAKE_HALF * 2}.0);
+      float shore = texture2D(uShoreTex, clamp(suv, 0.0, 1.0)).r;
+
+      float amp = 0.10 * (1.0 - 0.75 * shore);
+      float e = 0.22;
+      vec2 p = vLocal;
+      float hC = wH(p, uTime);
+      float hx = wH(p + vec2(e, 0.0), uTime) - wH(p - vec2(e, 0.0), uTime);
+      float hz = wH(p + vec2(0.0, e), uTime) - wH(p - vec2(0.0, e), uTime);
+      vec3 n = normalize(vec3(-hx * amp / (2.0 * e), 1.0, -hz * amp / (2.0 * e)));
+      vec3 V = normalize(cameraPosition - vWorld);
+
+      vec3 col = mix(uDeep, uShallow, smoothstep(0.05, 0.60, shore));
+      col = mix(col, uShoal, smoothstep(0.55, 0.80, shore));
+
+      float F = pow(1.0 - max(dot(n, V), 0.0), 3.0);
+      col = mix(col, uSky, F * 0.45);
+
+      vec3 H = normalize(V + uSunDir);
+      col += uSunCol * pow(max(dot(n, H), 0.0), 110.0) * 0.9;
+      col += uSunCol * pow(max(dot(n, H), 0.0), 14.0) * 0.06;
+
+      float band = smoothstep(0.34, 0.60, shore) * (1.0 - smoothstep(0.60, 0.80, shore));
+      float ring = 0.5 + 0.5 * sin(shore * 22.0 - uTime * 1.5);
+      float breakup = 0.5 + 0.5 * sin(vLocal.x * 3.1 + sin(vLocal.y * 2.7 + uTime * 0.8) * 2.0);
+      float foam = band * smoothstep(0.35, 0.85, ring) * smoothstep(0.25, 0.75, breakup);
+      foam += smoothstep(0.90, 1.35, hC) * 0.10 * (1.0 - shore);
+      col = mix(col, uFoam, clamp(foam, 0.0, 1.0) * 0.8);
+
+      col *= 1.0 - 0.20 * cloudShadow(vLocal, uTime) * (1.0 - foam);
+
+      float f = smoothstep(uFogNear, uFogFar, length(cameraPosition - vWorld));
+      col = mix(col, uFogColor, f);
+      gl_FragColor = vec4(col, 1.0);
+    }`
+});
+const water = new THREE.Mesh(new THREE.CircleGeometry(PEDESTAL_R, 96), waterMat);
+water.rotation.x = -Math.PI / 2;
+diorama.add(water);
+
+// ================================================================ ships
+const SHIP_COUNT = 90;
+const shipData = [];
+let hulls, sails;
+{
+  const hullGeo = gradientAO(mergeGeometries([
+    new THREE.CylinderGeometry(0.0, 0.16, 0.9, 6).rotateX(Math.PI / 2).translate(0, 0, 0.1),
+    new THREE.BoxGeometry(0.26, 0.12, 0.7).translate(0, 0.02, -0.15)
+  ]), -0.1, 0.12, 0.7);
+  hulls = new THREE.InstancedMesh(hullGeo, stdMat(PAL.hullWood), SHIP_COUNT);
+  const sailGeo = gradientAO(mergeGeometries([
+    new THREE.CylinderGeometry(0.015, 0.02, 0.6, 5).translate(0, 0.36, 0),
+    new THREE.PlaneGeometry(0.34, 0.4).translate(0, 0.4, 0.02)
+  ]), 0.1, 0.6, 0.85);
+  sails = new THREE.InstancedMesh(sailGeo,
+    stdMat(PAL.sailCloth, { roughness: 0.8, side: THREE.DoubleSide }), SHIP_COUNT);
+  hulls.castShadow = sails.castShadow = true;
+
+  let guard = 0;
+  while (shipData.length < SHIP_COUNT && guard++ < 6000) {
+    const lz = (-13 + Math.random() * 24) * K;
+    const lx = coastX(lz) - 2.5 - Math.random() * 14;
+    if (Math.hypot(lx, lz) > PEDESTAL_R - 1.2 || heightAt(lx, lz) > -0.15) continue;
+    shipData.push({
+      x: lx + DIORAMA_POS.x, z: lz + DIORAMA_POS.z,
+      heading: Math.random() * Math.PI * 2,
+      phase: Math.random() * Math.PI * 2,
+      scale: 0.55 + Math.random() * 0.6
+    });
+  }
+  world.add(hulls, sails);
+}
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(),
+      _s = new THREE.Vector3(), _p = new THREE.Vector3();
+function updateShips(t) {
+  for (let i = 0; i < shipData.length; i++) {
+    const d = shipData[i];
+    _p.set(d.x, 0.02 + Math.sin(t * 1.2 + d.phase) * 0.03, d.z);
+    _e.set(Math.sin(t * 1.1 + d.phase) * 0.04, d.heading, Math.sin(t * 0.9 + d.phase * 1.7) * 0.06);
+    _s.setScalar(d.scale);
+    _m.compose(_p, _q.setFromEuler(_e), _s);
+    hulls.setMatrixAt(i, _m);
+    sails.setMatrixAt(i, _m);
+  }
+  hulls.instanceMatrix.needsUpdate = true;
+  sails.instanceMatrix.needsUpdate = true;
+}
+
+// ================================================================ clouds
+const cloudMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uSunDir: { value: SUN_DIR },
+    uLit:    { value: PAL.cloudLit },
+    uShade:  { value: PAL.cloudShade },
+    uRim:    { value: PAL.cloudRim },
+    uFogColor: { value: scene.fog.color },
+    uFogNear:  { value: scene.fog.near },
+    uFogFar:   { value: scene.fog.far },
+    uFadeNear: { value: 2.5 },
+    uFadeFar:  { value: 8.0 }
+  },
+  alphaToCoverage: true,
+  vertexShader: `
+    varying vec3 vN; varying vec3 vWorld;
+    void main() {
+      vN = normalize(mat3(modelMatrix) * normal);
+      vec4 w = modelMatrix * vec4(position, 1.0);
+      vWorld = w.xyz;
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }`,
+  fragmentShader: `
+    uniform vec3 uSunDir, uLit, uShade, uRim, uFogColor;
+    uniform float uFogNear, uFogFar, uFadeNear, uFadeFar;
+    varying vec3 vN; varying vec3 vWorld;
+    void main() {
+      float dist = length(cameraPosition - vWorld);
+      float fade = smoothstep(uFadeNear, uFadeFar, dist);
+      if (fade < 0.02) discard;
+      vec3 n = normalize(vN);
+      vec3 V = normalize(cameraPosition - vWorld);
+      float sunDot = dot(n, uSunDir) * 0.5 + 0.5;
+      vec3 col = mix(uShade, uLit, smoothstep(0.25, 0.85, sunDot));
+      float rim = pow(1.0 - abs(dot(n, V)), 2.2);
+      col += uRim * rim * 0.4;
+      float f = smoothstep(uFogNear, uFogFar, dist);
+      col = mix(col, uFogColor, f * 0.8);
+      gl_FragColor = vec4(col, fade);
+    }`
+});
+function makePuffball() {
+  const blobs = [];
+  const n = 6 + Math.floor(Math.random() * 5);
+  for (let i = 0; i < n; i++) {
+    const g = new THREE.IcosahedronGeometry(0.5 + Math.random() * 0.9, 1);
+    const pos = g.attributes.position;
+    for (let v = 0; v < pos.count; v++) {
+      pos.setXYZ(v,
+        pos.getX(v) * (1 + (Math.random() - 0.5) * 0.12),
+        pos.getY(v) * 0.75,
+        pos.getZ(v) * (1 + (Math.random() - 0.5) * 0.12));
+    }
+    g.translate((Math.random() - 0.5) * 2.6, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 1.4);
+    g.computeVertexNormals();
+    blobs.push(g);
+  }
+  return new THREE.Mesh(mergeGeometries(blobs), cloudMat);
+}
+const cloudGroup = new THREE.Group();
+for (let i = 0; i < 10; i++) {
+  const c = makePuffball();
+  const a = Math.random() * Math.PI * 2;
+  const r = 10 + Math.random() * 14;
+  c.position.set(Math.cos(a) * r, 8 + Math.random() * 5, -7 + Math.sin(a) * r);
+  c.scale.setScalar(0.8 + Math.random() * 1.6);
+  c.userData.drift = 0.05 + Math.random() * 0.08;
+  cloudGroup.add(c);
+}
+world.add(cloudGroup);
+
+// ================================================================ light shafts
+const shaftGroup = new THREE.Group();
+const shaftMat = new THREE.ShaderMaterial({
+  uniforms: { uColor: { value: PAL.shaftGold } },
+  transparent: true, depthWrite: false,
+  blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: `
+    varying float vY;
+    void main() { vY = uv.y;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform vec3 uColor;
+    varying float vY;
+    void main() {
+      float a = smoothstep(0.0, 0.35, vY) * smoothstep(1.0, 0.55, vY);
+      gl_FragColor = vec4(uColor, a * 0.16);
+    }`
+});
+for (let i = 0; i < 4; i++) {
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.7 + i * 0.4, 2.2 + i * 0.8, 18, 12, 1, true), shaftMat);
+  shaft.position.copy(SUN_DIR).multiplyScalar(15).add(new THREE.Vector3((i - 1.5) * 2.4, 0, -7));
+  shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), SUN_DIR);
+  shaftGroup.add(shaft);
+}
+world.add(shaftGroup);
+
+// ================================================================ trade route
+const ROUTE_POINTS = 240;
+let routeCurve, routePoints, routeOffsets;
+{
+  routeCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-14, 3.0, -23), new THREE.Vector3(-12, 4.5, -16),
+    new THREE.Vector3(-10.5, 5.0, -9), new THREE.Vector3(-11, 4.5, -3),
+    new THREE.Vector3(-13.5, 3.5, 3),  new THREE.Vector3(-16, 3.0, 8)
+  ]);
+  const posArr = new Float32Array(ROUTE_POINTS * 3);
+  routeOffsets = new Float32Array(ROUTE_POINTS);
+  for (let i = 0; i < ROUTE_POINTS; i++) routeOffsets[i] = Math.random();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  routePoints = new THREE.Points(geo, new THREE.PointsMaterial({
+    color: PAL.cloudRim, size: 0.12, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+  }));
+  world.add(routePoints);
+}
+const _v = new THREE.Vector3();
+function updateRoute(t) {
+  const pos = routePoints.geometry.attributes.position;
+  for (let i = 0; i < ROUTE_POINTS; i++) {
+    const u = (routeOffsets[i] + t * 0.02) % 1;
+    routeCurve.getPointAt(u, _v);
+    _v.y += Math.sin(t * 2 + i) * 0.05;
+    pos.setXYZ(i, _v.x, _v.y, _v.z);
+  }
+  pos.needsUpdate = true;
+}
+
+// ================================================================ interaction
+const ctl0 = renderer.xr.getController(0);
+const ctl1 = renderer.xr.getController(1);
+player.add(ctl0, ctl1);
+
+// two-hand grab: stretch, shrink, and carry the diorama
+const grip = [false, false];
+ctl0.addEventListener('squeezestart', () => grip[0] = true);
+ctl0.addEventListener('squeezeend',   () => grip[0] = false);
+ctl1.addEventListener('squeezestart', () => grip[1] = true);
+ctl1.addEventListener('squeezeend',   () => grip[1] = false);
+let pinch = null;
+const _pa = new THREE.Vector3(), _pb = new THREE.Vector3(),
+      _mid = new THREE.Vector3(), _off = new THREE.Vector3();
+function updateGrabScale() {
+  if (grip[0] && grip[1]) {
+    ctl0.getWorldPosition(_pa);
+    ctl1.getWorldPosition(_pb);
+    _mid.addVectors(_pa, _pb).multiplyScalar(0.5);
+    const d = _pa.distanceTo(_pb);
+    if (!pinch) {
+      pinch = { d0: Math.max(d, 0.01), s0: world.scale.x,
+                p0: world.position.clone(), m0: _mid.clone() };
+    } else {
+      const s = THREE.MathUtils.clamp(pinch.s0 * d / pinch.d0, 0.05, 3.0);
+      world.scale.setScalar(s);
+      _off.copy(pinch.p0).sub(pinch.m0).multiplyScalar(s / pinch.s0);
+      world.position.copy(_mid).add(_off);
+    }
+  } else {
+    pinch = null;
+  }
+}
+
+// left stick: fly along the head's full look direction (pitch included)
+let snapReady = true;
+const _fwd = new THREE.Vector3(), _fwdH = new THREE.Vector3(),
+      _right = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
+function updateLocomotion(dt) {
+  const session = renderer.xr.getSession();
+  if (!session) return;
+  for (const src of session.inputSources) {
+    if (!src.gamepad) continue;
+    const [, , sx = 0, sy = 0] = src.gamepad.axes;
+    if (src.handedness === 'left' && (Math.abs(sx) > 0.15 || Math.abs(sy) > 0.15)) {
+      const xrCam = renderer.xr.getCamera();
+      xrCam.getWorldDirection(_fwd);                    // full 3D — fly where you look
+      player.position.addScaledVector(_fwd, -sy * dt * 3.2);
+      _fwdH.copy(_fwd); _fwdH.y = 0;
+      if (_fwdH.lengthSq() > 0.001) {                   // horizontal strafe
+        _right.crossVectors(_fwdH.normalize(), UP);
+        player.position.addScaledVector(_right, sx * dt * 2.6);
+      }
+    }
+    if (src.handedness === 'right') {
+      if (Math.abs(sx) > 0.6 && snapReady) {
+        player.rotation.y -= Math.sign(sx) * Math.PI / 6;
+        snapReady = false;
+      } else if (Math.abs(sx) < 0.3) snapReady = true;
+    }
+  }
+}
+
+// ================================================================ loop
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  waterUniforms.uTime.value = t;
+  updateShips(t);
+  updateRoute(t);
+  updateGrabScale();
+  updateLocomotion(dt);
+
+  for (const c of cloudGroup.children) {
+    c.position.x += c.userData.drift * dt;
+    if (c.position.x > 28) c.position.x = -28;
+  }
+
+  // Gentle float & slow rotation for the quote typography
+  if (textGroup) {
+    textGroup.position.y = 5.2 + Math.sin(t * 0.8) * 0.15;
+    textGroup.rotation.y = Math.sin(t * 0.2) * 0.04;
+  }
+
+  if (!renderer.xr.isPresenting) controls.update();
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

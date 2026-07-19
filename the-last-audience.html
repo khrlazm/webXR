@@ -330,6 +330,7 @@ function say(speaker, text, dur=3.4){
     subSpeaker.textContent = speaker || '';
     subText.innerHTML = text;
     subsBox.classList.add('show');
+    if(typeof vrUI!=='undefined') vrUI.sub(speaker,text,dur);
     if(speaker) A.lineCue();
     clearTimeout(subTimer);
     subTimer=setTimeout(()=>{ subsBox.classList.remove('show'); setTimeout(res, 450); }, dur*1000);
@@ -339,14 +340,24 @@ const wait = s => new Promise(r=>setTimeout(r, s*1000));
 function showAct(num, name, hold=3.2){
   actNum.textContent=num; actName.textContent=name;
   actCard.classList.add('show');
+  if(typeof vrUI!=='undefined') vrUI.act(num,name,hold);
   setTimeout(()=>actCard.classList.remove('show'), hold*1000);
+}
+let vrBoardCache={title:'',body:'',extra:'',hint:''};
+function vrPushBoard(){
+  if(!xrMode||typeof vrUI==='undefined') return;
+  const st=h=>{const d=document.createElement('div');d.innerHTML=(h||'').replace(/<br\s*\/?>/gi,'  \u2022  ');return d.textContent||'';};
+  vrUI.board(vrBoardCache.title,[st(vrBoardCache.body),st(vrBoardCache.extra),st(vrBoardCache.hint)]);
 }
 function setObjective(title, body, extra=''){
   objText.previousElementSibling.textContent=title;
   objText.innerHTML=body; hotspotCount.innerHTML=extra;
+  vrBoardCache.title=title; vrBoardCache.body=body; vrBoardCache.extra=extra; vrPushBoard();
 }
-function setControlsHint(html){ controlsBox.innerHTML=html; controlsBox.classList.toggle('hidden', !html); }
+function setControlsHint(html){ controlsBox.innerHTML=html; controlsBox.classList.toggle('hidden', !html);
+  vrBoardCache.hint=html; vrPushBoard(); }
 function judge(txt, good){
+  if(typeof vrUI!=='undefined') vrUI.judge(txt,good);
   judgeEl.textContent=txt; judgeEl.className=good?'good':'miss';
   gsap.fromTo(judgeEl,{opacity:1,scale:good?1.25:1},{opacity:0,scale:good?.9:1.05,duration:.9,ease:'power2.out'});
 }
@@ -1009,6 +1020,7 @@ function buildHotspots(){
       it.active=false; gsap.to(halo.material,{opacity:0,duration:1,onComplete:()=>scene.remove(halo)});
       hotspotsSeen++;
       hotspotCount.innerHTML=`Examined <b style="color:var(--gold-hi)">${hotspotsSeen} / ${HOTSPOT_TOTAL}</b>`;
+      vrBoardCache.extra=`Examined ${hotspotsSeen} / ${HOTSPOT_TOTAL}`; vrPushBoard();
       A.gong(262,.08);
       await say(speaker,line,dur);
       if(hotspotsSeen>=HOTSPOT_TOTAL){ endGameA(); }
@@ -1031,8 +1043,10 @@ async function endGameA(){
   interactables.length=0;
   cross.classList.add('hidden');
   blackout.style.transition='opacity 1s ease'; blackout.style.opacity=.85;
+  if(typeof vrUI!=='undefined') vrUI.fade(.85,1);
   await wait(1.3);
   blackout.style.opacity=0;
+  if(typeof vrUI!=='undefined') vrUI.fade(0,1);
   setTimeout(()=>{ blackout.style.transition='opacity 2s ease'; }, 1100);
   playSceneII();
 }
@@ -1274,9 +1288,11 @@ async function playSceneIII(){
   await say('','People remember grief.',4.6);
   A.setRain(.05); A.setCrickets(0);
   blackout.style.opacity=1;
+  if(typeof vrUI!=='undefined') vrUI.fade(1,2.5);
   await wait(2.5);
   setState(STATE.END);
   endCard.classList.add('show');
+  if(typeof vrUI!=='undefined') vrUI.end();
   document.body.classList.remove('cutscene');
   hud.classList.add('hidden');
 }
@@ -1321,6 +1337,7 @@ function animate(){
   }
   if(!xrMode) desktopMove(dt); else xrLocomotion(dt);
   hoverCheck();
+  if(typeof vrUI!=='undefined') vrUI.update(dt);
   renderer.render(scene,camera);
 }
 
@@ -1361,6 +1378,156 @@ if(navigator.xr){
     else $('btnVR').title='No VR headset detected';
   }).catch(()=>{});
 } else { $('btnVR').title='WebXR not available in this browser'; }
+</script>
+<script>
+/* ============================================================
+   VR DIEGETIC UI — canvas-textured panels that lazily follow
+   the head inside immersive sessions. DOM UI stays in sync
+   for flat mode; these render only while xrMode is true.
+   ============================================================ */
+const vrUI=(()=>{
+  let root=null, subP, actP, boardP, judgeP, fadeSphere, intGroup, intFill;
+  let subT=null, actT=null, boardT=null;
+  const strip=h=>{const d=document.createElement('div');d.innerHTML=h||'';return d.textContent||'';};
+
+  function mkPanel(w,h,worldW,order=999){
+    const c=document.createElement('canvas'); c.width=w; c.height=h;
+    const tex=new THREE.CanvasTexture(c); tex.minFilter=THREE.LinearFilter;
+    const mesh=new THREE.Mesh(new THREE.PlaneGeometry(worldW, worldW*h/w),
+      new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false,depthWrite:false}));
+    mesh.renderOrder=order; mesh.visible=false;
+    return {c,g:c.getContext('2d'),tex,mesh};
+  }
+  function wrap(g,text,x,y,maxW,lh){
+    const words=String(text).split(' '); let line='', yy=y;
+    for(const w of words){
+      const t=line?line+' '+w:w;
+      if(g.measureText(t).width>maxW && line){ g.fillText(line,x,yy); line=w; yy+=lh; }
+      else line=t;
+    }
+    if(line) g.fillText(line,x,yy);
+    return yy;
+  }
+  function frame(g,W,H,alpha){
+    g.clearRect(0,0,W,H);
+    g.fillStyle='rgba(6,3,2,'+alpha+')'; g.fillRect(0,0,W,H);
+    g.strokeStyle='rgba(201,160,78,.5)'; g.lineWidth=3; g.strokeRect(6,6,W-12,H-12);
+  }
+
+  function init(){
+    if(root) return;
+    root=new THREE.Group(); scene.add(root);
+    subP  =mkPanel(1024,300,1.45); subP.mesh.position.set(0,-.52,-1.9); root.add(subP.mesh);
+    actP  =mkPanel(1024,300,1.5);  actP.mesh.position.set(0,.18,-2.2);  root.add(actP.mesh);
+    boardP=mkPanel(1024,440,1.05); boardP.mesh.position.set(-.82,-.1,-1.85); boardP.mesh.rotation.y=.38; root.add(boardP.mesh);
+    judgeP=mkPanel(512,160,.75);   judgeP.mesh.position.set(0,-.12,-1.55); root.add(judgeP.mesh);
+
+    fadeSphere=new THREE.Mesh(new THREE.SphereGeometry(.45,16,16),
+      new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0,side:THREE.BackSide,depthTest:false,depthWrite:false}));
+    fadeSphere.renderOrder=1000; fadeSphere.visible=false; camera.add(fadeSphere);
+
+    /* physical intensity bar hovering above the drums */
+    intGroup=new THREE.Group();
+    const back=new THREE.Mesh(new THREE.BoxGeometry(.94,.06,.02),
+      new THREE.MeshBasicMaterial({color:0x171006,transparent:true,opacity:.85}));
+    intFill=new THREE.Mesh(new THREE.BoxGeometry(.9,.045,.024),
+      new THREE.MeshBasicMaterial({color:0xecd08a}));
+    intFill.scale.x=.02; intFill.position.set(-.45*.98,0,0);
+    const cap=new THREE.Mesh(new THREE.PlaneGeometry(.9,.09),(()=>{
+      const c=document.createElement('canvas'); c.width=512; c.height=52;
+      const g=c.getContext('2d'); g.textAlign='center'; g.fillStyle='#c9a04e';
+      g.font='26px Marcellus, serif'; g.fillText('INTENSITY OF THE TELLING',256,34);
+      const t=new THREE.CanvasTexture(c); t.minFilter=THREE.LinearFilter;
+      return new THREE.MeshBasicMaterial({map:t,transparent:true,depthWrite:false});
+    })());
+    cap.position.y=.11;
+    intGroup.add(back,intFill,cap);
+    intGroup.position.set(0,1.5,4.4); intGroup.rotation.y=Math.PI; intGroup.visible=false; scene.add(intGroup);
+  }
+
+  function sub(speaker,html,dur){
+    if(!xrMode||!root) return;
+    const text=strip(html), g=subP.g, W=1024, H=300;
+    frame(g,W,H,.78); g.textAlign='center';
+    if(speaker){ g.fillStyle='#c9a04e'; g.font='27px Marcellus, serif';
+      g.fillText(speaker.toUpperCase(),W/2,58); }
+    g.fillStyle='#efe6cf'; g.font='300 42px Spectral, Georgia, serif';
+    wrap(g,text,W/2,speaker?128:110,W-140,54);
+    subP.tex.needsUpdate=true; subP.mesh.visible=true;
+    clearTimeout(subT); subT=setTimeout(()=>{ subP.mesh.visible=false; }, dur*1000);
+  }
+  function act(num,name,hold){
+    if(!xrMode||!root) return;
+    const g=actP.g, W=1024, H=300;
+    g.clearRect(0,0,W,H);
+    g.fillStyle='rgba(0,0,0,.4)'; g.fillRect(0,0,W,H);
+    g.textAlign='center';
+    g.fillStyle='#c9a04e'; g.font='30px Marcellus, serif'; g.fillText(num,W/2,92);
+    g.fillStyle='#ecd08a'; g.font='84px Marcellus, serif'; g.fillText(name,W/2,196);
+    actP.tex.needsUpdate=true; actP.mesh.visible=true;
+    clearTimeout(actT); actT=setTimeout(()=>{ actP.mesh.visible=false; }, hold*1000);
+  }
+  function board(title,lines){
+    if(!xrMode||!root) return;
+    const g=boardP.g, W=1024, H=440;
+    frame(g,W,H,.8); g.textAlign='left';
+    g.fillStyle='#c9a04e'; g.font='30px Marcellus, serif';
+    g.fillText(String(title||'').toUpperCase(),42,66);
+    g.fillStyle='rgba(216,201,168,.95)'; g.font='31px Spectral, Georgia, serif';
+    let y=126;
+    for(const ln of lines){ if(!ln) continue; y=wrap(g,ln,42,y,W-84,42)+56; if(y>H-30) break; }
+    boardP.tex.needsUpdate=true; boardP.mesh.visible=true;
+    clearTimeout(boardT); boardT=setTimeout(()=>{ boardP.mesh.visible=false; }, 9000);
+  }
+  function judge(txt,good){
+    if(!xrMode||!root) return;
+    const g=judgeP.g;
+    g.clearRect(0,0,512,160); g.textAlign='center';
+    g.font='62px Marcellus, serif'; g.fillStyle=good?'#ffdf9b':'#8a4a3c';
+    g.fillText(txt,256,102);
+    judgeP.tex.needsUpdate=true;
+    judgeP.mesh.visible=true; judgeP.mesh.material.opacity=1;
+    gsap.to(judgeP.mesh.material,{opacity:0,duration:.9,ease:'power2.out',
+      onComplete:()=>{ judgeP.mesh.visible=false; judgeP.mesh.material.opacity=1; }});
+  }
+  function fade(op,dur){
+    if(!xrMode||!fadeSphere) return;
+    fadeSphere.visible=true;
+    gsap.to(fadeSphere.material,{opacity:op,duration:dur,
+      onComplete:()=>{ if(op===0) fadeSphere.visible=false; }});
+  }
+  function end(){
+    if(!xrMode||!root) return;
+    const g=actP.g, W=1024, H=300;
+    g.clearRect(0,0,W,H); g.textAlign='center';
+    g.fillStyle='rgba(216,201,168,.85)'; g.font='italic 300 34px Spectral, Georgia, serif';
+    g.fillText('Kingdoms remember victories.',W/2,72);
+    g.fillText('People remember grief.',W/2,120);
+    g.fillStyle='#c9a04e'; g.font='58px Marcellus, serif'; g.fillText('THE LAST AUDIENCE',W/2,214);
+    g.fillStyle='rgba(201,160,78,.6)'; g.font='22px Marcellus, serif'; g.fillText('MELAKA \u00b7 15TH CENTURY',W/2,262);
+    actP.tex.needsUpdate=true;
+    actP.mesh.renderOrder=1001; actP.mesh.visible=true;
+    clearTimeout(actT);
+  }
+  const tmpP=new THREE.Vector3(), tmpQ=new THREE.Quaternion(), tmpE=new THREE.Euler();
+  function update(dt){
+    if(!root) return;
+    if(!xrMode){ root.visible=false; intGroup.visible=false; return; }
+    root.visible=true;
+    camera.getWorldPosition(tmpP); camera.getWorldQuaternion(tmpQ);
+    tmpE.setFromQuaternion(tmpQ,'YXZ');
+    const targetQ=new THREE.Quaternion().setFromEuler(new THREE.Euler(0,tmpE.y,0));
+    root.position.lerp(tmpP,.14);
+    root.quaternion.slerp(targetQ,.08);
+    intGroup.visible=(state===STATE.PLAY_B);
+    if(intGroup.visible){
+      const v=Math.max(.02,intensity);
+      intFill.scale.x=v; intFill.position.x=-.45*(1-v);
+    }
+  }
+  return {init,sub,act,board,judge,fade,end,update};
+})();
+vrUI.init();
 </script>
 </body>
 </html>

@@ -34,9 +34,16 @@
             margin-bottom: 40px;
             line-height: 1.6;
         }
+        .links-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            align-items: center;
+        }
         .enter-btn {
             display: inline-block;
-            padding: 15px 40px;
+            width: 240px;
+            padding: 15px 20px;
             border: 1px solid #d4af37;
             color: #d4af37;
             text-decoration: none;
@@ -50,6 +57,15 @@
             color: #0c0a08;
             box-shadow: 0 0 15px rgba(212, 175, 55, 0.4);
         }
+        .secondary-btn {
+            border-color: #a89f91;
+            color: #a89f91;
+        }
+        .secondary-btn:hover {
+            background-color: #a89f91;
+            color: #0c0a08;
+            box-shadow: 0 0 15px rgba(168, 159, 145, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -58,7 +74,10 @@
         <h1>The Last Audience</h1>
         <p>"In the court of Melaka, loyalty and justice become indistinguishable."</p>
         
-        <a href="the-last-audience.html" class="enter-btn">Enter WebXR Experience</a>
+        <div class="links-container">
+            <a href="the-last-audience.html" class="enter-btn">Enter WebXR Experience</a>
+            <a href="malacca-sketch.html" class="enter-btn secondary-btn">View Palace Sketch</a>
+        </div>
     </div>
 
 </body>
