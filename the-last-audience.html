@@ -1121,8 +1121,10 @@ function playGameB(){
   /* reveal the stagehand's kit — placed in front of wherever the player
      is actually standing and facing (essential for VR) */
   placeStageKit();
-  props.drums.forEach(d=>{ d.group.visible=true; d.group.scale.set(.01,.01,.01);
-    gsap.to(d.group.scale,{x:1,y:1,z:1,duration:1,ease:'back.out(1.6)'}); });
+  props.drums.forEach(d=>{ d.group.visible=true; d.group.scale.set(.25,.25,.25);
+    gsap.to(d.group.scale,{x:1,y:1,z:1,duration:1,ease:'back.out(1.6)',
+      onInterrupt:()=>d.group.scale.set(1,1,1)});
+    setTimeout(()=>d.group.scale.set(1,1,1), 1600); });
   props.gongRack.visible=true;
   /* interactables */
   props.drums.forEach(d=>addInteractable(d.group,()=>drumHit(d),'drum'));
@@ -1318,6 +1320,7 @@ async function playSceneIII(){
    ============================================================ */
 function animate(){
   const dt=Math.min(clock.getDelta(),.05), t=clock.elapsedTime;
+  gsap.updateRoot(t);   /* keeps all tweens alive inside XR sessions */
   stateT+=dt;
   flickerTorches(t);
   if(world.dust) world.dust.rotation.y=t*.006;
@@ -1385,6 +1388,10 @@ window.addEventListener('resize',()=>{
 initThree(); buildMaterials(); buildPalace(); buildCharacters();
 enableTorchShadows(); initDesktopControls(); initXR();
 clock=new THREE.Clock();
+/* In immersive VR, window.requestAnimationFrame is suspended, which freezes
+   GSAP's internal ticker. Detach it and pump GSAP from the XR render loop. */
+gsap.ticker.remove(gsap.updateRoot);
+gsap.ticker.lagSmoothing(0);
 renderer.setAnimationLoop(animate);
 
 $('btnFlat').addEventListener('click',()=>start(false));
