@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GENESIS · sandbox sketch</title>
+<style>
+  :root{
+    --gold:#d8b45a; --gold-dim:#8a7440; --ink:#0b0c10;
+    --panel:rgba(10,12,18,.78); --line:rgba(216,180,90,.28);
+    --text:#cfd4dc; --muted:#7d8494;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:#000}
+  body{font-family:Georgia,'Times New Roman',serif;color:var(--text)}
+  canvas{display:block}
+
+  #title{
+    position:fixed;top:18px;left:22px;pointer-events:none;user-select:none;
+  }
+  #title h1{
+    font-size:26px;letter-spacing:.42em;font-weight:normal;color:var(--gold);
+    text-shadow:0 0 18px rgba(216,180,90,.35);
+  }
+  #title p{
+    font-style:italic;font-size:12px;color:var(--muted);letter-spacing:.06em;margin-top:4px;
+  }
+
+  #panel{
+    position:fixed;left:22px;top:96px;width:200px;
+    background:var(--panel);border:1px solid var(--line);border-radius:6px;
+    padding:14px 14px 12px;backdrop-filter:blur(6px);
+  }
+  .sec{font-size:10px;letter-spacing:.28em;color:var(--gold-dim);margin:10px 0 6px}
+  .sec:first-child{margin-top:0}
+  .tools{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .tool{
+    font-family:inherit;font-size:12px;letter-spacing:.04em;color:var(--text);
+    background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
+    border-radius:4px;padding:7px 4px;cursor:pointer;text-align:center;
+  }
+  .tool:hover{border-color:var(--line)}
+  .tool.on{background:rgba(216,180,90,.14);border-color:var(--gold);color:var(--gold)}
+  label{display:block;font-size:11px;color:var(--muted);margin:8px 0 2px;letter-spacing:.04em}
+  input[type=range]{width:100%;accent-color:var(--gold);height:14px}
+  .row{display:flex;align-items:center;gap:7px;margin-top:9px}
+  .row input{accent-color:var(--gold)}
+  .row span{font-size:11px;color:var(--muted)}
+
+  #hint{
+    position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
+    font-size:11.5px;letter-spacing:.08em;color:var(--muted);
+    background:var(--panel);border:1px solid rgba(255,255,255,.08);
+    padding:7px 16px;border-radius:20px;white-space:nowrap;user-select:none;
+  }
+  #hint b{color:var(--gold);font-weight:normal}
+</style>
+</head>
+<body>
+<div id="title">
+  <h1>GENESIS</h1>
+  <p>The world exists in the palm of your hands.</p>
+</div>
+
+<div id="panel">
+  <div class="sec">SHAPE</div>
+  <div class="tools">
+    <button class="tool on" data-tool="raise">▲ Raise</button>
+    <button class="tool" data-tool="lower">▼ Lower</button>
+    <button class="tool" data-tool="forest">🌲 Forest</button>
+    <button class="tool" data-tool="meteor">☄ Meteor</button>
+  </div>
+  <label>Brush size</label>
+  <input type="range" id="brush" min="0.6" max="3.2" step="0.1" value="1.6">
+  <div class="sec">NATURE</div>
+  <label>Sea level</label>
+  <input type="range" id="sea" min="-1.2" max="1.6" step="0.02" value="0">
+  <label>Sun</label>
+  <input type="range" id="sun" min="0" max="6.283" step="0.01" value="0.9">
+  <div class="row">
+    <input type="checkbox" id="cycle" checked><span>Let time flow</span>
+  </div>
+  <div class="row">
+    <input type="checkbox" id="snd"><span>Soundtrack</span>
+  </div>
+</div>
+
+<div id="hint"><b>drag land</b> to shape · <b>grab a cloud &amp; shake</b> to rain · <b>drag space</b> to orbit · <b>scroll</b> to zoom</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================
+   GENESIS — sandbox sketch
+   A floating disc-world you sculpt like wet clay.
+   ============================================================ */
+
+// ---------- tiny noise (value noise + fbm) ----------
+function hash2(ix, iz){
+  let n = Math.sin(ix*127.1 + iz*311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+function smooth(t){ return t*t*(3-2*t); }
+function vnoise(x, z){
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = smooth(x-ix), fz = smooth(z-iz);
+  const a = hash2(ix,iz), b = hash2(ix+1,iz), c = hash2(ix,iz+1), d = hash2(ix+1,iz+1);
+  return (a + (b-a)*fx + (c-a)*fz + (a-b-c+d)*fx*fz) * 2 - 1;
+}
+function fbm(x, z, oct){
+  let v=0, amp=0.5, f=1;
+  for(let i=0;i<oct;i++){ v += amp * vnoise(x*f, z*f); amp*=0.5; f*=2.03; }
+  return v;
+}
+
+// ---------- scene ----------
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 500);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+// orbit state (custom, no OrbitControls in r128 cdn build)
+let camTheta = 0.6, camPhi = 1.05, camDist = 24;
+let targetTheta = camTheta, targetPhi = camPhi, targetDist = camDist;
+function updateCamera(){
+  camTheta += (targetTheta-camTheta)*0.12;
+  camPhi   += (targetPhi-camPhi)*0.12;
+  camDist  += (targetDist-camDist)*0.12;
+  camera.position.set(
+    camDist*Math.sin(camPhi)*Math.cos(camTheta),
+    camDist*Math.cos(camPhi),
+    camDist*Math.sin(camPhi)*Math.sin(camTheta)
+  );
+  camera.lookAt(0, 0.5, 0);
+}
+
+// ---------- stars ----------
+{
+  const g = new THREE.BufferGeometry();
+  const N = 1800, pos = new Float32Array(N*3);
+  for(let i=0;i<N;i++){
+    const r = 130 + Math.random()*60;
+    const t = Math.random()*Math.PI*2, p = Math.acos(2*Math.random()-1);
+    pos[i*3]   = r*Math.sin(p)*Math.cos(t);
+    pos[i*3+1] = r*Math.cos(p);
+    pos[i*3+2] = r*Math.sin(p)*Math.sin(t);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({color:0xbfc8dd, size:0.5, sizeAttenuation:true})));
+}
+
+// ---------- lights, sun & moon ----------
+const sunLight = new THREE.DirectionalLight(0xfff2d8, 1.15);
+scene.add(sunLight);
+const ambient = new THREE.AmbientLight(0x30384a, 0.9);
+scene.add(ambient);
+const fill = new THREE.DirectionalLight(0x3a4a6a, 0.25);
+fill.position.set(-20,-10,-15); scene.add(fill);
+
+const sunMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(2.0, 24, 24),
+  new THREE.MeshBasicMaterial({color:0xffc861})
+);
+scene.add(sunMesh);
+const sunGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(3.4, 24, 24),
+  new THREE.MeshBasicMaterial({color:0xff9c33, transparent:true, opacity:0.25})
+);
+scene.add(sunGlow);
+
+const moonMat = new THREE.MeshStandardMaterial({
+  color:0xb9bcc4, roughness:1, emissive:0x9aa4b8, emissiveIntensity:0.15
+});
+const moonMesh = new THREE.Mesh(new THREE.SphereGeometry(1.1, 24, 24), moonMat);
+scene.add(moonMesh);
+const moonGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(1.7, 24, 24),
+  new THREE.MeshBasicMaterial({color:0xaebfe6, transparent:true, opacity:0.12})
+);
+scene.add(moonGlow);
+const moonLight = new THREE.DirectionalLight(0xa8bce8, 0.0);   // cool blue moonlight
+scene.add(moonLight);
+
+let sunAngle = 0.9;
+function placeSun(){
+  const R = 55;
+  sunMesh.position.set(Math.cos(sunAngle)*R, Math.sin(sunAngle)*38, 18);
+  sunGlow.position.copy(sunMesh.position);
+  sunLight.position.copy(sunMesh.position);
+  moonMesh.position.set(Math.cos(sunAngle+Math.PI)*46, Math.sin(sunAngle+Math.PI)*30, -14);
+  moonGlow.position.copy(moonMesh.position);
+  moonLight.position.copy(moonMesh.position);
+  const day   = Math.max(0, Math.sin(sunAngle));          // 0 at night
+  const night = Math.max(0, -Math.sin(sunAngle));         // 0 during day
+  sunLight.intensity  = 0.15 + day*1.15;
+  moonLight.intensity = 0.06 + night*0.5;                 // silvery light when the moon is up
+  ambient.intensity   = 0.35 + day*0.6 + night*0.12;
+  ambient.color.setHSL(0.62, night*0.35, 0.22 + day*0.06); // cooler, bluer ambience at night
+  moonMat.emissiveIntensity = 0.15 + night*0.45;
+  moonGlow.material.opacity = 0.08 + night*0.2;
+  dayFactor = day; nightFactor = night;
+}
+
+// ---------- disc terrain (polar grid) ----------
+const WORLD_R = 10;
+const RINGS = 84, SEGS = 220;
+const VCOUNT = RINGS*SEGS + 1;
+
+const heights = new Float32Array(VCOUNT);
+const vx = new Float32Array(VCOUNT);  // fixed xz layout
+const vz = new Float32Array(VCOUNT);
+
+function vidx(ring, seg){ return ring===0 ? 0 : 1 + (ring-1)*SEGS + (seg % SEGS); }
+
+function baseHeight(x, z){
+  const cont = fbm(x*0.085+3.7, z*0.085-1.2, 4);   // continents
+  const det  = fbm(x*0.28-8.1,  z*0.28+5.5, 5);    // detail
+  return cont*3.1 + det*1.05 - 0.25;
+}
+
+// layout + initial heights
+vx[0]=0; vz[0]=0; heights[0]=baseHeight(0,0);
+for(let r=1;r<=RINGS;r++){
+  const rad = (r/RINGS)*WORLD_R;
+  for(let s=0;s<SEGS;s++){
+    const a = (s/SEGS)*Math.PI*2;
+    const i = vidx(r,s);
+    vx[i]=Math.cos(a)*rad; vz[i]=Math.sin(a)*rad;
+    heights[i]=baseHeight(vx[i], vz[i]);
+  }
+}
+
+// indices (upward winding)
+const idx = [];
+for(let s=0;s<SEGS;s++) idx.push(0, vidx(1,s+1), vidx(1,s));
+for(let r=1;r<RINGS;r++){
+  for(let s=0;s<SEGS;s++){
+    const a=vidx(r,s), b=vidx(r,s+1), c=vidx(r+1,s), d=vidx(r+1,s+1);
+    idx.push(a,d,c,  a,b,d);
+  }
+}
+
+const terrainGeo = new THREE.BufferGeometry();
+const tPos = new Float32Array(VCOUNT*3);
+const tCol = new Float32Array(VCOUNT*3);
+terrainGeo.setAttribute('position', new THREE.BufferAttribute(tPos,3));
+terrainGeo.setAttribute('color', new THREE.BufferAttribute(tCol,3));
+terrainGeo.setIndex(idx);
+const terrainMat = new THREE.MeshLambertMaterial({vertexColors:true});
+const terrain = new THREE.Mesh(terrainGeo, terrainMat);
+scene.add(terrain);
+
+// biome palette
+const C = {
+  abyss:[0.10,0.16,0.19], shelf:[0.35,0.33,0.24], sand:[0.83,0.75,0.52],
+  grass:[0.40,0.62,0.30], forest:[0.20,0.44,0.22], rock:[0.52,0.49,0.44],
+  snow:[0.94,0.96,0.98]
+};
+function lerp3(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+
+let seaLevel = 0;
+
+const SOAK_GREEN = [0.10, 0.31, 0.12];   // deep rain-fed green
+const WET_SAND   = [0.55, 0.47, 0.32];
+
+function colorFor(h, x, z, wet){
+  const d = h - seaLevel;
+  let c;
+  if(d < -1.2)      c = C.abyss;
+  else if(d < 0)    c = lerp3(C.abyss, C.shelf, (d+1.2)/1.2);
+  else if(d < 0.14) c = C.sand;
+  else if(d < 0.9)  c = lerp3(C.grass, C.forest, (d-0.14)/0.76);
+  else if(d < 1.9)  c = lerp3(C.forest, C.rock, (d-0.9)/1.0);
+  else if(d < 2.6)  c = lerp3(C.rock, C.snow, (d-1.9)/0.7);
+  else              c = C.snow;
+  if(wet > 0.01){
+    if(d >= 0.14 && d < 1.9)      c = lerp3(c, SOAK_GREEN, Math.min(1, wet)*0.8); // lush soaked land
+    else if(d >= 0 && d < 0.14)   c = lerp3(c, WET_SAND, Math.min(1, wet)*0.6);   // damp shoreline
+  }
+  const j = vnoise(x*1.7, z*1.7)*0.035;
+  return [c[0]+j, c[1]+j, c[2]+j];
+}
+
+function recolorOnly(){   // colors only — no normals, cheap enough to run while it rains
+  for(let i=0;i<VCOUNT;i++){
+    const c = colorFor(heights[i], vx[i], vz[i], moisture[i]);
+    tCol[i*3]=c[0]; tCol[i*3+1]=c[1]; tCol[i*3+2]=c[2];
+  }
+  terrainGeo.attributes.color.needsUpdate = true;
+}
+
+function refreshTerrain(){
+  for(let i=0;i<VCOUNT;i++){
+    tPos[i*3]=vx[i]; tPos[i*3+1]=heights[i]; tPos[i*3+2]=vz[i];
+    const c = colorFor(heights[i], vx[i], vz[i], moisture[i]);
+    tCol[i*3]=c[0]; tCol[i*3+1]=c[1]; tCol[i*3+2]=c[2];
+  }
+  terrainGeo.attributes.position.needsUpdate = true;
+  terrainGeo.attributes.color.needsUpdate = true;
+  terrainGeo.computeVertexNormals();
+  syncSkirtTop();
+  markWaterfallsDirty();
+}
+
+// nearest-vertex lookup (cheap, no raycast)
+function nearestVertex(x, z){
+  if(x*x+z*z > WORLD_R*WORLD_R) return -1;
+  let best=-1, bd=1e9;
+  const ringGuess = Math.min(RINGS, Math.max(1, Math.round(Math.sqrt(x*x+z*z)/WORLD_R*RINGS)));
+  const segGuess = ((Math.atan2(z,x)/(Math.PI*2))*SEGS + SEGS)|0;
+  for(let dr=-1;dr<=1;dr++) for(let ds=-2;ds<=2;ds++){
+    const rr=ringGuess+dr; if(rr<1||rr>RINGS) continue;
+    const i=vidx(rr, segGuess+ds);
+    const d=(vx[i]-x)**2+(vz[i]-z)**2;
+    if(d<bd){bd=d;best=i;}
+  }
+  return best;
+}
+function nearestHeight(x, z){
+  const i = nearestVertex(x, z);
+  return i<0 ? null : heights[i];
+}
+
+// ---------- moisture: the land remembers the rain ----------
+const moisture = new Float32Array(VCOUNT);
+let wetMax = 0;
+function soak(idx, amt){
+  moisture[idx] = Math.min(1, moisture[idx]+amt);
+  wetMax = Math.max(wetMax, moisture[idx]);
+  // spread a little to ring/segment neighbours
+  if(idx>0){
+    const ring = ((idx-1)/SEGS|0)+1, seg = (idx-1)%SEGS;
+    const nb = [];
+    if(ring>1) nb.push(vidx(ring-1,seg));
+    if(ring<RINGS) nb.push(vidx(ring+1,seg));
+    nb.push(vidx(ring,seg+1), vidx(ring,seg+SEGS-1));
+    nb.forEach(n=>{ moisture[n]=Math.min(1, moisture[n]+amt*0.45); });
+  }
+}
+
+// ---------- rock skirt (the underside of the world) ----------
+const SK_LAYERS = 6;
+const skGeo = new THREE.BufferGeometry();
+const skPos = new Float32Array((SK_LAYERS+1)*SEGS*3);
+const skCol = new Float32Array((SK_LAYERS+1)*SEGS*3);
+const skIdx = [];
+function skv(l,s){ return l*SEGS + (s%SEGS); }
+for(let l=0;l<SK_LAYERS;l++){
+  for(let s=0;s<SEGS;s++){
+    const a=skv(l,s), b=skv(l,s+1), c=skv(l+1,s), d=skv(l+1,s+1);
+    skIdx.push(a,c,d,  a,d,b);   // outward-facing
+  }
+}
+skGeo.setIndex(skIdx);
+skGeo.setAttribute('position', new THREE.BufferAttribute(skPos,3));
+skGeo.setAttribute('color', new THREE.BufferAttribute(skCol,3));
+
+function buildSkirt(){
+  for(let l=0;l<=SK_LAYERS;l++){
+    const t = l/SK_LAYERS;
+    const y0 = -t*6.2;
+    for(let s=0;s<SEGS;s++){
+      const a=(s/SEGS)*Math.PI*2;
+      const jag = vnoise(Math.cos(a)*6+t*9, Math.sin(a)*6-t*7);
+      const taper = 1 - t*t*0.24;
+      const rad = WORLD_R*(1 + 0.015 + jag*0.04*(0.3+t)) * taper;
+      const i = skv(l,s);
+      skPos[i*3]=Math.cos(a)*rad;
+      skPos[i*3+1]= l===0 ? Math.min(heights[vidx(RINGS,s)], seaLevel+0.02) : y0 + jag*0.5;
+      skPos[i*3+2]=Math.sin(a)*rad;
+      const sh = 0.16 + jag*0.05 + t*0.02;
+      skCol[i*3]=sh+0.07; skCol[i*3+1]=sh+0.045; skCol[i*3+2]=sh;
+    }
+  }
+  skGeo.attributes.position.needsUpdate = true;
+  skGeo.attributes.color.needsUpdate = true;
+  skGeo.computeVertexNormals();
+}
+function syncSkirtTop(){
+  for(let s=0;s<SEGS;s++){
+    const i = skv(0,s);
+    skPos[i*3+1] = Math.min(heights[vidx(RINGS,s)], seaLevel+0.02);
+  }
+  skGeo.attributes.position.needsUpdate = true;
+}
+const skirt = new THREE.Mesh(skGeo, new THREE.MeshLambertMaterial({vertexColors:true}));
+scene.add(skirt);
+
+// bottom cap
+{
+  const capGeo = new THREE.CircleGeometry(WORLD_R*0.72, 48);
+  capGeo.rotateX(Math.PI/2);
+  const cap = new THREE.Mesh(capGeo, new THREE.MeshLambertMaterial({color:0x1c1712}));
+  cap.position.y = -6.1;
+  scene.add(cap);
+}
+
+// ---------- sea ----------
+const SEA_RINGS = 22, SEA_SEGS = 110;
+const seaVC = SEA_RINGS*SEA_SEGS+1;
+const seaPos = new Float32Array(seaVC*3);
+const seaBaseR = new Float32Array(seaVC);
+const seaBaseA = new Float32Array(seaVC);
+function svid(r,s){ return r===0?0:1+(r-1)*SEA_SEGS+(s%SEA_SEGS); }
+{
+  seaBaseR[0]=0; seaBaseA[0]=0;
+  for(let r=1;r<=SEA_RINGS;r++){
+    const rad=(r/SEA_RINGS)*(WORLD_R+0.12);
+    for(let s=0;s<SEA_SEGS;s++){
+      const i=svid(r,s);
+      seaBaseR[i]=rad; seaBaseA[i]=(s/SEA_SEGS)*Math.PI*2;
+    }
+  }
+  const sidx=[];
+  for(let s=0;s<SEA_SEGS;s++) sidx.push(0,svid(1,s+1),svid(1,s));
+  for(let r=1;r<SEA_RINGS;r++)
+    for(let s=0;s<SEA_SEGS;s++){
+      const a=svid(r,s),b=svid(r,s+1),c=svid(r+1,s),d=svid(r+1,s+1);
+      sidx.push(a,d,c, a,b,d);
+    }
+  var seaGeo = new THREE.BufferGeometry();
+  seaGeo.setIndex(sidx);
+  seaGeo.setAttribute('position', new THREE.BufferAttribute(seaPos,3));
+}
+const seaMat = new THREE.MeshPhongMaterial({
+  color:0x2a6f9e, transparent:true, opacity:0.8, shininess:110,
+  specular:0x9fd0ff, side:THREE.DoubleSide
+});
+const sea = new THREE.Mesh(seaGeo, seaMat);
+scene.add(sea);
+function animateSea(t){
+  for(let i=0;i<seaVC;i++){
+    const r=seaBaseR[i], a=seaBaseA[i];
+    seaPos[i*3]=Math.cos(a)*r;
+    seaPos[i*3+1]=seaLevel + Math.sin(t*1.4 + r*1.8 + a*3)*0.045;
+    seaPos[i*3+2]=Math.sin(a)*r;
+  }
+  seaGeo.attributes.position.needsUpdate=true;
+  seaGeo.computeVertexNormals();
+}
+
+// ---------- waterfalls at the rim ----------
+const WF_N = 700;
+const wfGeo = new THREE.BufferGeometry();
+const wfPos = new Float32Array(WF_N*3);
+const wfVel = new Float32Array(WF_N);
+const wfSlot = new Int16Array(WF_N).fill(-1);
+wfGeo.setAttribute('position', new THREE.BufferAttribute(wfPos,3));
+const wf = new THREE.Points(wfGeo, new THREE.PointsMaterial({
+  color:0xbfe6ff, size:0.09, transparent:true, opacity:0.75,
+  blending:THREE.AdditiveBlending, depthWrite:false
+}));
+wf.frustumCulled = false;
+scene.add(wf);
+
+let wfSlots = [];       // rim segments where ocean spills over
+let wfDirty = true;
+function markWaterfallsDirty(){ wfDirty = true; }
+function rebuildWaterfallSlots(){
+  wfSlots.length = 0;
+  for(let s=0;s<SEGS;s+=2){
+    if(heights[vidx(RINGS,s)] < seaLevel - 0.02) wfSlots.push(s);
+  }
+  wfDirty = false;
+}
+function animateWaterfalls(dt){
+  if(wfDirty) rebuildWaterfallSlots();
+  const has = wfSlots.length>0;
+  wf.visible = has;
+  if(!has) return;
+  for(let i=0;i<WF_N;i++){
+    if(wfSlot[i] < 0 || wfPos[i*3+1] < -6.4){
+      const s = wfSlots[(Math.random()*wfSlots.length)|0];
+      wfSlot[i] = s;
+      const a = (s/SEGS)*Math.PI*2 + (Math.random()-0.5)*0.028;
+      const rad = WORLD_R + 0.12 + Math.random()*0.1;
+      wfPos[i*3]=Math.cos(a)*rad;
+      wfPos[i*3+1]=seaLevel - Math.random()*0.25;
+      wfPos[i*3+2]=Math.sin(a)*rad;
+      wfVel[i]=0.5+Math.random()*0.8;
+    }
+    wfVel[i]+=dt*7.5;
+    wfPos[i*3+1]-=wfVel[i]*dt;
+  }
+  wfGeo.attributes.position.needsUpdate=true;
+}
+
+// ---------- clouds ----------
+const cloudGroup = new THREE.Group();
+scene.add(cloudGroup);
+const cloudMat = new THREE.MeshLambertMaterial({color:0xf4f6fa, transparent:true, opacity:0.82});
+const clouds = [];
+for(let k=0;k<5;k++){
+  const g = new THREE.Group();
+  const mat = cloudMat.clone();                 // per-cloud material → per-cloud storm darkness
+  const puffs = 4 + (Math.random()*3|0);
+  for(let p=0;p<puffs;p++){
+    const s = 0.35+Math.random()*0.55;
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(s,1), mat);
+    m.position.set((Math.random()-0.5)*1.6, (Math.random()-0.5)*0.3, (Math.random()-0.5)*1.0);
+    m.scale.y = 0.55;
+    g.add(m);
+  }
+  const orbitR = 2.5 + Math.random()*6;
+  const phase = Math.random()*Math.PI*2;
+  const speed = 0.02+Math.random()*0.025;
+  g.position.y = 3.6+Math.random()*1.4;
+  clouds.push({g, mat, orbitR, phase, speed, held:false, energy:0, raining:0, nextBolt:0});
+  cloudGroup.add(g);
+}
+
+// ---------- rain (shake a cloud to wring it out) ----------
+const RAIN_N = 900;
+const rainGeo = new THREE.BufferGeometry();
+const rainPos = new Float32Array(RAIN_N*2*3);       // each drop = a falling streak (2 verts)
+const rainVel = new Float32Array(RAIN_N);
+const rainCloud = new Int8Array(RAIN_N).fill(-1);
+for(let i=0;i<RAIN_N*2;i++) rainPos[i*3+1] = -999;
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos,3));
+const rainLines = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+  color:0x9fd0f5, transparent:true, opacity:0.55, depthWrite:false
+}));
+rainLines.frustumCulled = false;   // dynamic verts start off-world; stale bounds would cull it
+scene.add(rainLines);
+
+// impact splashes: tiny sparks that pop where drops land
+const SPLASH_N = 260;
+const splashGeo = new THREE.BufferGeometry();
+const splashPos = new Float32Array(SPLASH_N*3);
+const splashVel = new Float32Array(SPLASH_N*3);
+const splashLife = new Float32Array(SPLASH_N);
+for(let i=0;i<SPLASH_N;i++) splashPos[i*3+1]=-999;
+splashGeo.setAttribute('position', new THREE.BufferAttribute(splashPos,3));
+const splashPts = new THREE.Points(splashGeo, new THREE.PointsMaterial({
+  color:0xd6ecff, size:0.07, transparent:true, opacity:0.75, depthWrite:false
+}));
+splashPts.frustumCulled = false;
+scene.add(splashPts);
+let splashCursor = 0;
+function splash(x, y, z){
+  for(let k=0;k<2;k++){
+    const i = splashCursor; splashCursor=(splashCursor+1)%SPLASH_N;
+    splashPos[i*3]=x; splashPos[i*3+1]=y+0.03; splashPos[i*3+2]=z;
+    const a=Math.random()*Math.PI*2;
+    splashVel[i*3]=Math.cos(a)*0.5; splashVel[i*3+1]=0.9+Math.random()*0.7; splashVel[i*3+2]=Math.sin(a)*0.5;
+    splashLife[i]=0.35;
+  }
+}
+
+function animateRain(dt){
+  const raining = [];
+  clouds.forEach((c,ci)=>{ if(c.raining>0.05) raining.push(ci); });
+  let total = 0; clouds.forEach(c=>total+=c.raining);
+  for(let i=0;i<RAIN_N;i++){
+    const a=i*2, b=i*2+1;                     // streak head / tail vertex
+    if(rainCloud[i]<0){
+      if(raining.length && Math.random() < 0.14*Math.min(1.5,total)){
+        const ci = raining[(Math.random()*raining.length)|0];
+        const c = clouds[ci];
+        rainCloud[i]=ci;
+        const x = c.g.position.x + (Math.random()-0.5)*1.9;
+        const y = c.g.position.y - 0.25;
+        const z = c.g.position.z + (Math.random()-0.5)*1.3;
+        rainPos[a*3]=x; rainPos[a*3+1]=y; rainPos[a*3+2]=z;
+        rainPos[b*3]=x; rainPos[b*3+1]=y+0.18; rainPos[b*3+2]=z;
+        rainVel[i]=3.5+Math.random()*2.5;
+      }
+      continue;
+    }
+    rainVel[i]+=dt*4;
+    const drop = rainVel[i]*dt;
+    rainPos[a*3+1]-=drop;
+    rainPos[b*3+1]=rainPos[a*3+1] + 0.12 + rainVel[i]*0.035;   // streak stretches with speed
+    const x=rainPos[a*3], y=rainPos[a*3+1], z=rainPos[a*3+2];
+    const vi = nearestVertex(x,z);
+    const h = vi<0 ? null : heights[vi];
+    const ground = (h===null) ? -7 : Math.max(h, seaLevel);
+    if(y <= ground){
+      if(h!==null){
+        soak(vi, 0.09);                        // the land drinks
+        const d = h - seaLevel;
+        if(d>0.12 && d<1.6 && Math.random()<0.04) addTree(x, h, z);
+      }
+      splash(x, ground, z);
+      rainCloud[i]=-1;
+      rainPos[a*3+1]=-999; rainPos[b*3+1]=-999;
+    }
+  }
+  rainGeo.attributes.position.needsUpdate=true;
+
+  // splashes
+  for(let i=0;i<SPLASH_N;i++){
+    if(splashLife[i]<=0) continue;
+    splashLife[i]-=dt;
+    splashVel[i*3+1]-=dt*5;
+    splashPos[i*3]+=splashVel[i*3]*dt;
+    splashPos[i*3+1]+=splashVel[i*3+1]*dt;
+    splashPos[i*3+2]+=splashVel[i*3+2]*dt;
+    if(splashLife[i]<=0) splashPos[i*3+1]=-999;
+  }
+  splashGeo.attributes.position.needsUpdate=true;
+  return Math.min(1, total);
+}
+
+// ---------- trees (instanced) ----------
+const TREE_MAX = 1600;
+const foliageGeo = new THREE.ConeGeometry(0.16, 0.5, 6);
+foliageGeo.translate(0, 0.42, 0);
+const trunkGeo = new THREE.CylinderGeometry(0.035, 0.05, 0.22, 5);
+trunkGeo.translate(0, 0.11, 0);
+const foliage = new THREE.InstancedMesh(foliageGeo, new THREE.MeshLambertMaterial({color:0x2f6b2e}), TREE_MAX);
+const trunks  = new THREE.InstancedMesh(trunkGeo,  new THREE.MeshLambertMaterial({color:0x5a4632}), TREE_MAX);
+foliage.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+trunks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(foliage); scene.add(trunks);
+const treePos = [];   // {x,y,z} per live tree
+let treeCount = 0;
+const _m = new THREE.Matrix4();
+const _zero = new THREE.Matrix4().makeScale(0,0,0);
+function commitTree(i, x, y, z, s){
+  _m.makeRotationY(Math.random()*Math.PI*2);
+  _m.scale(new THREE.Vector3(s,s,s));
+  _m.setPosition(x,y,z);
+  foliage.setMatrixAt(i,_m); trunks.setMatrixAt(i,_m);
+}
+function addTree(x, y, z){
+  if(treeCount>=TREE_MAX) return;
+  const s = 0.7+Math.random()*0.7;
+  commitTree(treeCount, x, y, z, s);
+  treePos.push({x,y,z});
+  treeCount++;
+  foliage.count = trunks.count = treeCount;
+  foliage.instanceMatrix.needsUpdate = trunks.instanceMatrix.needsUpdate = true;
+}
+function killTreesNear(x, z, rad){
+  let changed=false;
+  for(let i=0;i<treeCount;i++){
+    const t=treePos[i];
+    if(t && (t.x-x)**2 + (t.z-z)**2 < rad*rad){
+      foliage.setMatrixAt(i,_zero); trunks.setMatrixAt(i,_zero);
+      treePos[i]=null; changed=true;
+    }
+  }
+  if(changed) foliage.instanceMatrix.needsUpdate = trunks.instanceMatrix.needsUpdate = true;
+}
+
+// ---------- sculpting ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let tool = 'raise';
+let brushR = 1.6;
+
+const brushRing = new THREE.Mesh(
+  new THREE.TorusGeometry(1, 0.03, 8, 48),
+  new THREE.MeshBasicMaterial({color:0xd8b45a, transparent:true, opacity:0.65})
+);
+brushRing.rotation.x = Math.PI/2;
+brushRing.visible = false;
+scene.add(brushRing);
+
+function terrainHit(e){
+  pointer.x = (e.clientX/innerWidth)*2-1;
+  pointer.y = -(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(terrain);
+  return hit.length ? hit[0].point : null;
+}
+
+function sculpt(px, pz, sign, dt){
+  const r2 = brushR*brushR;
+  const rate = 2.4*dt*sign;
+  for(let i=0;i<VCOUNT;i++){
+    const dx=vx[i]-px, dz=vz[i]-pz;
+    const d2=dx*dx+dz*dz;
+    if(d2<r2){
+      const fall = Math.exp(-d2/(r2*0.35));
+      heights[i] = Math.min(4.6, Math.max(-3.4, heights[i]+rate*fall));
+    }
+  }
+  refreshTerrain();
+}
+
+function plantForest(px, pz){
+  const tries = 6;
+  for(let k=0;k<tries;k++){
+    const a=Math.random()*Math.PI*2, rr=Math.random()*brushR;
+    const x=px+Math.cos(a)*rr, z=pz+Math.sin(a)*rr;
+    if(x*x+z*z > (WORLD_R-0.3)**2) continue;
+    const h = nearestHeight(x, z);
+    if(h===null) continue;
+    const d=h-seaLevel;
+    if(d>0.12 && d<1.6) addTree(x, h, z);
+  }
+}
+
+// ---------- meteor ----------
+let meteor = null;
+const meteorMesh = new THREE.Mesh(
+  new THREE.IcosahedronGeometry(0.5,1),
+  new THREE.MeshBasicMaterial({color:0xff7a2a})
+);
+const meteorTrail = new THREE.Mesh(
+  new THREE.ConeGeometry(0.35, 3.4, 8),
+  new THREE.MeshBasicMaterial({color:0xffb066, transparent:true, opacity:0.5})
+);
+meteorMesh.add(meteorTrail);
+meteorTrail.position.y = 1.8;
+meteorMesh.visible = false;
+scene.add(meteorMesh);
+const flash = new THREE.PointLight(0xffa040, 0, 30);
+scene.add(flash);
+
+function launchMeteor(target){
+  meteor = { t:0, from:new THREE.Vector3(target.x+9, 16, target.z-7), to:target.clone() };
+  meteorMesh.visible = true;
+}
+function updateMeteor(dt){
+  if(!meteor) { flash.intensity*=0.9; return; }
+  meteor.t += dt*1.4;
+  const p = Math.min(1, meteor.t);
+  meteorMesh.position.lerpVectors(meteor.from, meteor.to, p);
+  meteorMesh.lookAt(meteor.to);
+  if(p>=1){
+    const {x,z} = meteor.to;
+    const crR = 1.7, cr2=crR*crR;
+    for(let i=0;i<VCOUNT;i++){
+      const dx=vx[i]-x, dz=vz[i]-z, d2=dx*dx+dz*dz;
+      if(d2<cr2*2.2){
+        const rim = Math.exp(-((Math.sqrt(d2)-crR*0.9)**2)/0.12)*0.35;
+        const pit = Math.exp(-d2/(cr2*0.42))*1.6;
+        heights[i]=Math.max(-3.4, heights[i]-pit+rim);
+      }
+    }
+    killTreesNear(x,z,crR*1.5);
+    refreshTerrain();
+    flash.position.set(x, meteor.to.y+1.2, z);
+    flash.intensity = 8;
+    if(music) music.boom();
+    meteorMesh.visible=false;
+    meteor=null;
+  }
+}
+
+// ---------- mystical soundtrack (generative, Web Audio) ----------
+let dayFactor = 1, nightFactor = 0;
+let music = null;
+
+function midiHz(m){ return 440 * Math.pow(2, (m-69)/12); }
+
+function createMusic(){
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  master.connect(ctx.destination);
+
+  // shared cathedral-ish space: feedback delay as a poor man's reverb
+  const delay = ctx.createDelay(2); delay.delayTime.value = 0.46;
+  const fb = ctx.createGain(); fb.gain.value = 0.42;
+  const wet = ctx.createGain(); wet.gain.value = 0.5;
+  delay.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(master);
+
+  // --- drone: root + fifth, slowly breathing lowpass ---
+  const droneFilter = ctx.createBiquadFilter();
+  droneFilter.type = 'lowpass'; droneFilter.frequency.value = 420; droneFilter.Q.value = 0.7;
+  const droneGain = ctx.createGain(); droneGain.gain.value = 0.10;
+  droneFilter.connect(droneGain); droneGain.connect(master); droneGain.connect(delay);
+  [[38,0],[38,4],[45,-3],[45,2]].forEach(([m, cents])=>{   // D2 + A2, softly detuned
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = midiHz(m);
+    o.detune.value = cents;
+    const g = ctx.createGain(); g.gain.value = 0.28;
+    o.connect(g); g.connect(droneFilter);
+    o.start();
+  });
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 0.045;
+  const lfoAmt = ctx.createGain(); lfoAmt.gain.value = 160;
+  lfo.connect(lfoAmt); lfoAmt.connect(droneFilter.frequency);
+  lfo.start();
+
+  // --- pad: 4 gliding voices drifting between chords (D lydian-ish) ---
+  const chords = [
+    [50, 57, 64, 66],   // D  A  E  F#
+    [47, 54, 62, 66],   // B  F# D  F#
+    [43, 50, 59, 66],   // G  D  B  F#  (lydian color)
+    [45, 52, 61, 64],   // A  E  C# E
+  ];
+  const padGain = ctx.createGain(); padGain.gain.value = 0.045;
+  const padFilter = ctx.createBiquadFilter();
+  padFilter.type = 'lowpass'; padFilter.frequency.value = 900;
+  padFilter.connect(padGain); padGain.connect(master); padGain.connect(delay);
+  const padVoices = chords[0].map(m=>{
+    const o = ctx.createOscillator();
+    o.type = 'sine'; o.frequency.value = midiHz(m);
+    const g = ctx.createGain(); g.gain.value = 0.25;
+    o.connect(g); g.connect(padFilter); o.start();
+    return o;
+  });
+  let chordIdx = 0;
+  function nextChord(){
+    chordIdx = (chordIdx + 1) % chords.length;
+    const t = ctx.currentTime;
+    padVoices.forEach((o,i)=>{
+      o.frequency.cancelScheduledValues(t);
+      o.frequency.setValueAtTime(o.frequency.value, t);
+      o.frequency.linearRampToValueAtTime(midiHz(chords[chordIdx][i]), t + 7); // slow glide
+    });
+  }
+  const chordTimer = setInterval(nextChord, 22000);
+
+  // --- chimes: sparse pentatonic bells, denser under the stars ---
+  const chimeScale = [74, 76, 78, 81, 83, 86, 88, 93];   // D maj pentatonic, high
+  let chimeTimeout = null;
+  function chime(){
+    const t = ctx.currentTime;
+    const m = chimeScale[(Math.random()*chimeScale.length)|0];
+    const o = ctx.createOscillator(); o.type='sine'; o.frequency.value = midiHz(m);
+    const o2 = ctx.createOscillator(); o2.type='sine'; o2.frequency.value = midiHz(m)*2.01; // sparkle
+    const g = ctx.createGain(); const g2 = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.10, t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+3.2);
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.exponentialRampToValueAtTime(0.025, t+0.02);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t+1.6);
+    o.connect(g); o2.connect(g2);
+    g.connect(master); g.connect(delay); g2.connect(delay);
+    o.start(t); o2.start(t); o.stop(t+3.5); o2.stop(t+2);
+    scheduleChime();
+  }
+  function scheduleChime(){
+    const wait = (2.5 + Math.random()*4.5) * (1 - nightFactor*0.45); // more twinkle at night
+    chimeTimeout = setTimeout(chime, wait*1000);
+  }
+  scheduleChime();
+
+  // --- wind: whispering filtered noise ---
+  const nbuf = ctx.createBuffer(1, ctx.sampleRate*2, ctx.sampleRate);
+  const nd = nbuf.getChannelData(0);
+  for(let i=0;i<nd.length;i++) nd[i] = Math.random()*2-1;
+  const noise = ctx.createBufferSource(); noise.buffer=nbuf; noise.loop=true;
+  const nFilter = ctx.createBiquadFilter();
+  nFilter.type='bandpass'; nFilter.frequency.value=520; nFilter.Q.value=0.6;
+  const nGain = ctx.createGain(); nGain.gain.value = 0.014;
+  const nLfo = ctx.createOscillator(); nLfo.frequency.value=0.09;
+  const nLfoAmt = ctx.createGain(); nLfoAmt.gain.value=0.009;
+  nLfo.connect(nLfoAmt); nLfoAmt.connect(nGain.gain);
+  noise.connect(nFilter); nFilter.connect(nGain); nGain.connect(master);
+  noise.start(); nLfo.start();
+
+  // --- rain patter: bright noise that swells while clouds are wrung out ---
+  const rainNoise = ctx.createBufferSource(); rainNoise.buffer=nbuf; rainNoise.loop=true;
+  const rainFilter = ctx.createBiquadFilter();
+  rainFilter.type='bandpass'; rainFilter.frequency.value=2600; rainFilter.Q.value=0.5;
+  const rainGain = ctx.createGain(); rainGain.gain.value=0;
+  rainNoise.connect(rainFilter); rainFilter.connect(rainGain); rainGain.connect(master);
+  rainNoise.start();
+  function setRain(v){
+    rainGain.gain.setTargetAtTime(v*0.045, ctx.currentTime, 0.5);
+  }
+
+  // --- thunder: a crack, then the rumble rolls across the void ---
+  function thunder(){
+    const t = ctx.currentTime;
+    // crack
+    const cb = ctx.createBufferSource(); cb.buffer=nbuf;
+    const cf = ctx.createBiquadFilter(); cf.type='bandpass'; cf.frequency.value=1400; cf.Q.value=0.7;
+    const cg = ctx.createGain();
+    cg.gain.setValueAtTime(0.0001, t);
+    cg.gain.exponentialRampToValueAtTime(0.3, t+0.015);
+    cg.gain.exponentialRampToValueAtTime(0.0001, t+0.35);
+    cb.connect(cf); cf.connect(cg); cg.connect(master); cg.connect(delay);
+    cb.start(t); cb.stop(t+0.5);
+    // rumble
+    const rb = ctx.createBufferSource(); rb.buffer=nbuf; rb.playbackRate.value=0.4;
+    const rf = ctx.createBiquadFilter(); rf.type='lowpass'; rf.frequency.value=140;
+    const rg = ctx.createGain();
+    rg.gain.setValueAtTime(0.0001, t+0.08);
+    rg.gain.exponentialRampToValueAtTime(0.34, t+0.25);
+    rg.gain.exponentialRampToValueAtTime(0.0001, t+2.8);
+    rb.connect(rf); rf.connect(rg); rg.connect(master); rg.connect(delay);
+    rb.start(t+0.08); rb.stop(t+3);
+  }
+
+  // --- divine boom for meteor impacts ---
+  function boom(){
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator(); o.type='sine';
+    o.frequency.setValueAtTime(64, t);
+    o.frequency.exponentialRampToValueAtTime(26, t+1.4);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t+0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+1.8);
+    o.connect(g); g.connect(master); g.connect(delay);
+    o.start(t); o.stop(t+2);
+    const nb = ctx.createBufferSource(); nb.buffer=nbuf;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(0.18, t+0.02);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t+0.9);
+    const nf = ctx.createBiquadFilter(); nf.type='lowpass'; nf.frequency.value=300;
+    nb.connect(nf); nf.connect(ng); ng.connect(master);
+    nb.start(t); nb.stop(t+1);
+  }
+
+  // sunlight brightens the drone, night darkens it
+  const tone = setInterval(()=>{
+    droneFilter.frequency.setTargetAtTime(280 + dayFactor*420, ctx.currentTime, 1.5);
+  }, 500);
+
+  function setOn(on){
+    if(on){
+      ctx.resume();
+      master.gain.setTargetAtTime(0.85, ctx.currentTime, 1.2);   // slow fade in
+    } else {
+      master.gain.setTargetAtTime(0.0, ctx.currentTime, 0.5);
+    }
+  }
+  return { ctx, boom, setRain, thunder, setOn };
+}
+
+document.getElementById('snd').addEventListener('change', e=>{
+  if(!music) music = createMusic();
+  music.setOn(e.target.checked);
+});
+
+// ---------- lightning ----------
+const BOLT_PTS = 8;
+const boltGeo = new THREE.BufferGeometry();
+const boltPos = new Float32Array(BOLT_PTS*3);
+boltGeo.setAttribute('position', new THREE.BufferAttribute(boltPos,3));
+const bolt = new THREE.Line(boltGeo, new THREE.LineBasicMaterial({
+  color:0xeef4ff, transparent:true, opacity:0.95
+}));
+bolt.frustumCulled = false;
+bolt.visible=false;
+scene.add(bolt);
+const boltLight = new THREE.PointLight(0xcfe0ff, 0, 26);
+scene.add(boltLight);
+let boltTimer = 0;
+
+function strikeLightning(c){
+  const x = c.g.position.x + (Math.random()-0.5)*1.2;
+  const z = c.g.position.z + (Math.random()-0.5)*0.9;
+  const topY = c.g.position.y - 0.3;
+  const h = nearestHeight(x, z);
+  const groundY = (h===null) ? -3 : Math.max(h, seaLevel);
+  // jagged path from cloud to ground
+  for(let i=0;i<BOLT_PTS;i++){
+    const p = i/(BOLT_PTS-1);
+    const jx = (i===0||i===BOLT_PTS-1) ? 0 : (Math.random()-0.5)*0.55;
+    const jz = (i===0||i===BOLT_PTS-1) ? 0 : (Math.random()-0.5)*0.55;
+    boltPos[i*3]  = x + jx;
+    boltPos[i*3+1]= topY + (groundY-topY)*p;
+    boltPos[i*3+2]= z + jz;
+  }
+  boltGeo.attributes.position.needsUpdate=true;
+  bolt.visible=true; boltTimer=0.14;
+  boltLight.position.set(x, groundY+1.6, z);
+  boltLight.intensity = 15;
+  if(h!==null && h>seaLevel) killTreesNear(x, z, 0.75);   // scorched earth
+  if(music) music.thunder();
+}
+
+// ---------- input ----------
+let dragging=false, orbiting=false, lastX=0, lastY=0;
+let heldCloud=null, lastShakeDir=new THREE.Vector2(), prevDragPt=null;
+let lastT = 0;
+let wetTick = 0;
+
+function cloudHit(e){
+  pointer.x = (e.clientX/innerWidth)*2-1;
+  pointer.y = -(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(cloudGroup.children, true);
+  if(!hits.length) return null;
+  let obj = hits[0].object;
+  while(obj.parent && obj.parent !== cloudGroup) obj = obj.parent;
+  return clouds.find(c=>c.g===obj) || null;
+}
+function planePoint(e, y){
+  pointer.x = (e.clientX/innerWidth)*2-1;
+  pointer.y = -(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(pointer, camera);
+  const o = raycaster.ray.origin, d = raycaster.ray.direction;
+  if(Math.abs(d.y)<1e-5) return null;
+  const s = (y - o.y)/d.y;
+  if(s<0) return null;
+  return new THREE.Vector3(o.x+d.x*s, y, o.z+d.z*s);
+}
+
+renderer.domElement.addEventListener('pointerdown', e=>{
+  lastX=e.clientX; lastY=e.clientY;
+  if(e.button===0){
+    const c = cloudHit(e);
+    if(c){                                   // grab the cloud
+      heldCloud = c; c.held = true;
+      prevDragPt = planePoint(e, c.g.position.y);
+      renderer.domElement.style.cursor='grabbing';
+      return;
+    }
+    const hit = terrainHit(e);
+    if(hit){
+      if(tool==='meteor'){ launchMeteor(hit); return; }
+      dragging=true;
+      return;
+    }
+  }
+  orbiting=true;
+});
+addEventListener('pointerup', ()=>{
+  if(heldCloud){                             // release: resume drifting from here
+    const c = heldCloud;
+    const p = c.g.position;
+    c.orbitR = Math.min(8.5, Math.max(1.2, Math.hypot(p.x, p.z)));
+    c.phase = Math.atan2(p.z, p.x) - lastT*c.speed;
+    c.held=false; heldCloud=null;
+    renderer.domElement.style.cursor='';
+  }
+  dragging=false; orbiting=false;
+});
+addEventListener('pointermove', e=>{
+  if(heldCloud){                             // drag & detect shaking
+    const c = heldCloud;
+    const p = planePoint(e, c.g.position.y);
+    if(p){
+      const r = Math.hypot(p.x, p.z);
+      if(r > WORLD_R+1.5){ p.multiplyScalar((WORLD_R+1.5)/r); p.y=c.g.position.y; }
+      if(prevDragPt){
+        const dx=p.x-prevDragPt.x, dz=p.z-prevDragPt.z;
+        const len=Math.hypot(dx,dz);
+        if(len>1e-4){
+          if(lastShakeDir.x*dx + lastShakeDir.y*dz < 0)   // direction flip = a shake
+            c.energy = Math.min(3, c.energy + len*1.5);
+          lastShakeDir.set(dx,dz);
+        }
+      }
+      c.g.position.x=p.x; c.g.position.z=p.z;
+      prevDragPt=p;
+    }
+    lastX=e.clientX; lastY=e.clientY;
+    return;
+  }
+
+  const overCloud = cloudHit(e);
+  renderer.domElement.style.cursor = overCloud ? 'grab' : '';
+  const hit = overCloud ? null : terrainHit(e);
+  if(hit && tool!=='meteor'){
+    brushRing.visible=true;
+    brushRing.position.set(hit.x, hit.y+0.06, hit.z);
+    brushRing.scale.setScalar(brushR);
+  } else brushRing.visible = (tool==='meteor') ? false : brushRing.visible && !!hit;
+  if(!hit) brushRing.visible=false;
+
+  if(orbiting){
+    targetTheta += (e.clientX-lastX)*0.006;
+    targetPhi = Math.min(1.5, Math.max(0.25, targetPhi + (e.clientY-lastY)*0.005));
+  }
+  lastX=e.clientX; lastY=e.clientY;
+  if(dragging && hit){ pendingSculpt = hit; }
+  else pendingSculpt = dragging ? pendingSculpt : null;
+});
+renderer.domElement.addEventListener('wheel', e=>{
+  targetDist = Math.min(60, Math.max(9, targetDist + e.deltaY*0.02));
+},{passive:true});
+renderer.domElement.addEventListener('contextmenu', e=>e.preventDefault());
+let pendingSculpt = null;
+
+// ---------- UI ----------
+document.querySelectorAll('.tool').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.tool').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    tool = b.dataset.tool;
+  });
+});
+document.getElementById('brush').addEventListener('input', e=>brushR=+e.target.value);
+document.getElementById('sea').addEventListener('input', e=>{
+  seaLevel=+e.target.value; refreshTerrain();
+});
+const sunSlider = document.getElementById('sun');
+sunSlider.addEventListener('input', e=>{ sunAngle=+e.target.value; });
+const cycleBox = document.getElementById('cycle');
+
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- go ----------
+buildSkirt();
+refreshTerrain();
+
+let last = performance.now();
+function animate(now){
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.05, (now-last)/1000); last=now;
+  const t = now/1000;
+
+  if(cycleBox.checked){
+    sunAngle = (sunAngle + dt*0.07) % (Math.PI*2);
+    sunSlider.value = sunAngle;
+  }
+  placeSun();
+
+  if(pendingSculpt){
+    if(tool==='raise') sculpt(pendingSculpt.x, pendingSculpt.z, +1, dt);
+    else if(tool==='lower') sculpt(pendingSculpt.x, pendingSculpt.z, -1, dt);
+    else if(tool==='forest') plantForest(pendingSculpt.x, pendingSculpt.z);
+  }
+
+  animateSea(t);
+  animateWaterfalls(dt);
+  updateMeteor(dt);
+
+  clouds.forEach(c=>{
+    if(!c.held){
+      const a = t*c.speed + c.phase;
+      c.g.position.x = Math.cos(a)*c.orbitR;
+      c.g.position.z = Math.sin(a)*c.orbitR;
+    }
+    c.energy *= Math.exp(-dt*0.7);                          // shakes wear off
+    c.raining = Math.max(0, Math.min(1, (c.energy-0.25)/1.1));
+    const squeeze = 1 - c.raining*0.12;                     // wrung-out clouds sag a little
+    c.g.scale.set(1, squeeze, 1);
+    // the longer you shake, the darker the storm
+    const darkness = Math.min(1, c.energy/2.4);
+    c.mat.color.setRGB(
+      0.957 - darkness*0.66,
+      0.965 - darkness*0.65,
+      0.980 - darkness*0.60
+    );
+    c.mat.opacity = 0.82 + darkness*0.12;
+    // storm-charged: lightning!
+    if(c.energy > 2.1 && t > c.nextBolt){
+      strikeLightning(c);
+      c.energy -= 0.55;                                     // each bolt discharges the cloud
+      c.nextBolt = t + 0.4 + Math.random()*0.9;
+    }
+  });
+  if(boltTimer>0){ boltTimer-=dt; if(boltTimer<=0) bolt.visible=false; }
+  boltLight.intensity *= 0.82;
+
+  // moisture slowly dries; soaked land fades back
+  wetTick += dt;
+  if(wetTick > 0.25){
+    wetTick = 0;
+    if(wetMax > 0.004){
+      let m = 0;
+      for(let i=0;i<VCOUNT;i++){ moisture[i]*=0.985; if(moisture[i]>m) m=moisture[i]; }
+      wetMax = m;
+      recolorOnly();
+    }
+  }
+
+  const rainAmt = animateRain(dt);
+  if(music) music.setRain(rainAmt);
+  lastT = t;
+
+  updateCamera();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

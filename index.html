@@ -1,18 +1,141 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Links</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sketches</title>
+<style>
+  :root{
+    --gold:#d8b45a; --gold-dim:#8a7440;
+    --text:#cfd4dc; --muted:#6f7686;
+    --line:rgba(216,180,90,.22);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{min-height:100%}
+  body{
+    background:#050608;
+    color:var(--text);
+    font-family:Georgia,'Times New Roman',serif;
+    display:flex;align-items:center;justify-content:center;
+    padding:48px 20px;
+    position:relative;
+    overflow-x:hidden;
+  }
+
+  /* starfield — three drifting layers of CSS stars */
+  .stars, .stars::before, .stars::after{
+    content:"";
+    position:fixed;inset:-50%;
+    background-image:
+      radial-gradient(1px 1px at 12% 24%, #bfc8dd 50%, transparent 51%),
+      radial-gradient(1px 1px at 68% 12%, #9aa4b8 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 33% 71%, #dfe6f2 50%, transparent 51%),
+      radial-gradient(1px 1px at 84% 57%, #bfc8dd 50%, transparent 51%),
+      radial-gradient(1px 1px at 47% 39%, #8a93a8 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 91% 86%, #dfe6f2 50%, transparent 51%),
+      radial-gradient(1px 1px at 21% 88%, #9aa4b8 50%, transparent 51%),
+      radial-gradient(1px 1px at 59% 94%, #bfc8dd 50%, transparent 51%);
+    background-size:640px 640px;
+    animation:drift 240s linear infinite;
+    pointer-events:none;
+    opacity:.8;
+  }
+  .stars::before{ background-size:920px 920px; animation-duration:360s; opacity:.5 }
+  .stars::after{ background-size:440px 440px; animation-duration:180s; opacity:.35 }
+  @keyframes drift{ to{ transform:translate3d(220px,120px,0) } }
+  @media (prefers-reduced-motion: reduce){
+    .stars,.stars::before,.stars::after{ animation:none }
+  }
+
+  main{
+    position:relative;
+    width:min(560px, 100%);
+  }
+  header{ margin-bottom:36px }
+  h1{
+    font-weight:normal;
+    font-size:30px;
+    letter-spacing:.4em;
+    color:var(--gold);
+    text-shadow:0 0 22px rgba(216,180,90,.3);
+  }
+  header p{
+    margin-top:8px;
+    font-style:italic;
+    font-size:13px;
+    letter-spacing:.06em;
+    color:var(--muted);
+  }
+
+  ul{ list-style:none; border-top:1px solid var(--line) }
+  li{ border-bottom:1px solid var(--line) }
+  a{
+    display:flex;
+    align-items:baseline;
+    gap:16px;
+    padding:18px 10px;
+    text-decoration:none;
+    color:var(--text);
+    transition:background .18s, color .18s, padding-left .18s;
+  }
+  a:hover, a:focus-visible{
+    background:rgba(216,180,90,.06);
+    color:var(--gold);
+    padding-left:20px;
+    outline:none;
+  }
+  .num{
+    font-size:11px;
+    letter-spacing:.2em;
+    color:var(--gold-dim);
+    min-width:2.2em;
+  }
+  .name{
+    font-size:17px;
+    letter-spacing:.04em;
+  }
+  .file{
+    margin-left:auto;
+    font-size:11px;
+    letter-spacing:.08em;
+    color:var(--muted);
+  }
+  a:hover .file{ color:var(--gold-dim) }
+
+  footer{
+    margin-top:30px;
+    font-size:11px;
+    letter-spacing:.14em;
+    color:var(--muted);
+    text-align:right;
+  }
+</style>
 </head>
 <body>
-
-    <ul>
-        <li><a href="malacca-sketch.html">malacca-sketch.html</a></li>
-        <li><a href="port.html">port.html</a></li>
-        <li><a href="the-last-audience.html">the-last-audience.html</a></li>
-        <li><a href="harbor.html">harbor.html</a></li>
-    </ul>
-
+<div class="stars" aria-hidden="true"></div>
+<main>
+  <header>
+    <h1>SKETCHES</h1>
+    <p>Small worlds, works in progress.</p>
+  </header>
+  <ul>
+    <li><a href="genesis-sketch.html">
+      <span class="num">I</span><span class="name">Genesis</span><span class="file">genesis-sketch.html</span>
+    </a></li>
+    <li><a href="malacca-sketch.html">
+      <span class="num">II</span><span class="name">Malacca</span><span class="file">malacca-sketch.html</span>
+    </a></li>
+    <li><a href="port.html">
+      <span class="num">III</span><span class="name">Port</span><span class="file">port.html</span>
+    </a></li>
+    <li><a href="the-last-audience.html">
+      <span class="num">IV</span><span class="name">The Last Audience</span><span class="file">the-last-audience.html</span>
+    </a></li>
+    <li><a href="harbor.html">
+      <span class="num">V</span><span class="name">Harbor</span><span class="file">harbor.html</span>
+    </a></li>
+  </ul>
+  <footer>✦</footer>
+</main>
 </body>
 </html>
