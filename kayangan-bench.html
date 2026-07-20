@@ -34,9 +34,10 @@
 
   /* ---- Control panel (top left) ---- */
   #panel {
-    position: fixed; top: 14px; left: 16px; width: 230px;
+    position: fixed; top: 14px; left: 16px; width: 232px;
     background: var(--panel); border: 1px solid rgba(201, 161, 90, 0.35);
     padding: 14px 16px 12px;
+    max-height: calc(100vh - 40px); overflow-y: auto;
   }
   #panel h1 {
     font-size: 15px; font-weight: normal; letter-spacing: 0.30em;
@@ -47,6 +48,7 @@
     color: rgba(232, 226, 213, 0.45); margin: 3px 0 12px;
   }
   .row { margin-bottom: 10px; }
+  .row.dim { opacity: 0.35; pointer-events: none; }
   .row label {
     display: flex; justify-content: space-between;
     font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
@@ -71,6 +73,12 @@
     font-family: inherit; font-size: 11px; letter-spacing: 0.08em;
     text-transform: uppercase;
   }
+  .check {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: rgba(232, 226, 213, 0.7); cursor: pointer; margin-bottom: 10px;
+  }
+  .check input { accent-color: #c9a15a; }
   #panel .hint {
     font-size: 10px; color: rgba(232, 226, 213, 0.35);
     border-top: 1px solid rgba(201, 161, 90, 0.2);
@@ -101,7 +109,7 @@
 
 <div id="panel">
   <h1>Kayangan</h1>
-  <div class="sub">Visual Bench · Step 0–1</div>
+  <div class="sub">Visual Bench · Step 0–3</div>
   <div class="row">
     <label>Quality <span id="v-q"></span></label>
     <select id="s-q">
@@ -110,13 +118,22 @@
       <option value="low">Low — mobile / Quest</option>
     </select>
   </div>
-  <div class="row">
+  <label class="check"><input id="c-cycle" type="checkbox"> Time flows</label>
+  <div class="row" id="r-az">
     <label>Sun azimuth <span id="v-az">40°</span></label>
     <input id="s-az" type="range" min="0" max="360" step="1" value="40">
   </div>
-  <div class="row">
+  <div class="row" id="r-el">
     <label>Sun elevation <span id="v-el">28°</span></label>
     <input id="s-el" type="range" min="-30" max="90" step="1" value="28">
+  </div>
+  <div class="row">
+    <label>Sea level <span id="v-sea">0.00</span></label>
+    <input id="s-sea" type="range" min="-0.22" max="0.22" step="0.005" value="0">
+  </div>
+  <div class="row">
+    <label>Moisture <span id="v-wet">0.00</span></label>
+    <input id="s-wet" type="range" min="0" max="1" step="0.01" value="0">
   </div>
   <div class="row">
     <label>Exposure <span id="v-ex">1.00</span></label>
@@ -124,8 +141,8 @@
   </div>
   <div class="hint">
     Drag to orbit · wheel to zoom.<br>
-    <code>?forcewebgl</code> tests the WebGL2 path ·
-    <code>?q=low|medium|high</code> forces a tier.
+    <code>?forcewebgl</code> WebGL2 path · <code>?q=low|medium|high</code>
+    force tier · <code>?seed=N</code> new continents.
   </div>
 </div>
 
@@ -141,31 +158,28 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   Fn, float, vec3, vec4, uniform,
-  positionLocal, normalize, dot, pow, max, exp, abs,
+  positionLocal, normalLocal, normalize, dot, pow, max, exp, abs,
   mix, smoothstep, fract, sin, floor, length,
   mx_noise_float, pmremTexture, cubeTexture
 } from 'three/tsl';
 
 /* ============================================================
-   QUALITY TIERS — pulled forward from Step 6 after real-device
-   testing (Samsung A06 / Quest 2 @ 9fps on the naive build).
-   Auto-detected from UA, overridable via ?q= or the dropdown.
+   QUALITY TIERS — every shader must survive the low tier.
    ============================================================ */
 const TIERS = {
-  high:   { octaves: 5, cube: 1024, pixelRatio: 2.0, bakeMs: 250, antialias: true  },
-  medium: { octaves: 4, cube: 512,  pixelRatio: 1.5, bakeMs: 450, antialias: true  },
-  low:    { octaves: 3, cube: 256,  pixelRatio: 1.0, bakeMs: 900, antialias: false },
+  high:   { octaves: 5, cube: 1024, pixelRatio: 2.0, bakeMs: 250, antialias: true,  detail: true  },
+  medium: { octaves: 4, cube: 512,  pixelRatio: 1.5, bakeMs: 450, antialias: true,  detail: true  },
+  low:    { octaves: 3, cube: 256,  pixelRatio: 1.0, bakeMs: 900, antialias: false, detail: false },
 };
 const search = new URLSearchParams(location.search);
 const qParam = search.get('q');
 const autoTier = /Quest|Android|Mobile/i.test(navigator.userAgent) ? 'low' : 'high';
 const tierName = TIERS[qParam] ? qParam : autoTier;
 const TIER = TIERS[tierName];
+const SEED = parseFloat(search.get('seed')) || 7;
 
 /* ============================================================
    STEP 0 — HARNESS
-   Renderer boot with WebGPU detection + WebGL2 fallback,
-   backend badge, perf HUD, AgX tone mapping from frame one.
    ============================================================ */
 const forceWebGL = search.has('forcewebgl');
 
@@ -181,19 +195,17 @@ try {
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, TIER.pixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.toneMapping = THREE.AgXToneMapping;   // graded correctly from frame one
+renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1.0;
 document.body.appendChild(renderer.domElement);
 
-// Backend badge — the single source of truth for which path we're on.
 const isWebGPU = !!(renderer.backend && renderer.backend.isWebGPUBackend);
 const badge = document.getElementById('backend');
 badge.textContent = (isWebGPU ? 'WEBGPU' : 'WEBGL2') + ' · ' + tierName.toUpperCase();
 badge.classList.toggle('webgl', !isWebGPU);
 
-// Some embedded/preview environments stub console partially — guard everything.
 const log = (...a) => { try { (console.log || (() => {}))('[Kayangan bench]', ...a); } catch (_) {} };
-log('backend:', badge.textContent);
+log('backend:', badge.textContent, '· seed:', SEED);
 
 function bootFail(msg) {
   document.getElementById('boot-error').style.display = 'grid';
@@ -201,30 +213,18 @@ function bootFail(msg) {
 }
 
 /* ============================================================
-   STEP 1 — NEBULA SKY (TSL), BAKED-STATIC ARCHITECTURE
-
-   Perf lesson from real devices: the procedural nebula
-   (~19 noise calls/pixel) must NEVER run per-frame on screen.
-
-   - BAKE material: full procedural nebula + sun. Rendered only
-     into the cube target when the sun moves (throttled).
-   - DISPLAY material: one cube-texture fetch + live stars +
-     live crisp sun disc (hashes and dot products — nearly free).
-   - Environment: pmremTexture(cube) for PBR lighting.
-
-   This whole block lifts into the future SkyEnv module.
+   STEP 1 — NEBULA SKY (baked-static architecture)
+   Rule learned on real devices: procedural sky NEVER runs
+   per-pixel per-frame. Bake shader -> cube; display = 1 fetch.
+   Future SkyEnv module.
    ============================================================ */
-
-// --- Uniforms shared between sky shaders and JS ---
 const uSunDir = uniform(new THREE.Vector3(0, 0.5, -1).normalize());
 
-// --- TSL helpers ---
 const hash3 = Fn(([p]) =>
   fract(sin(dot(p, vec3(127.1, 311.7, 74.7))).mul(43758.5453123))
 );
 
-// fbm built in JS: composes a fixed-octave node chain at construction time.
-function fbm(p, octaves) {
+function fbmNode(p, octaves) {
   let value = float(0);
   let amp = 0.5;
   let q = p;
@@ -236,7 +236,6 @@ function fbm(p, octaves) {
   return value; // roughly [-1, 1]
 }
 
-// Live star layer — cheap enough to run per-frame at any tier.
 const starLayer = Fn(([dir]) => {
   const cell = dir.mul(140.0);
   const id = floor(cell);
@@ -247,33 +246,26 @@ const starLayer = Fn(([dir]) => {
   return tint.mul(presence).mul(glow).mul(2.2);
 });
 
-// --- BAKE shader: the expensive nebula, evaluated only during bakes ---
 const skyBakeNode = Fn(() => {
   const dir = normalize(positionLocal);
-
-  // Deep-space base
   const col = vec3(0.008, 0.010, 0.022).toVar();
 
-  // Galactic band: density falls off away from a tilted plane
   const bandN = normalize(vec3(0.35, 1.0, 0.18));
   const band = exp(abs(dot(dir, bandN)).mul(-4.0));
 
-  // Nebula layers — gold identity first, blue depth second, magenta whisper
-  const nGold = fbm(dir.mul(3.0).add(vec3(13.7, 0.0, 4.1)), TIER.octaves).mul(0.5).add(0.5);
-  const nBlue = fbm(dir.mul(5.0).add(vec3(0.0, 27.3, 9.1)), TIER.octaves).mul(0.5).add(0.5);
-  const nMag  = fbm(dir.mul(4.0).add(vec3(51.0, 3.3, 17.7)), Math.max(TIER.octaves - 1, 2)).mul(0.5).add(0.5);
+  const nGold = fbmNode(dir.mul(3.0).add(vec3(13.7, 0.0, 4.1)), TIER.octaves).mul(0.5).add(0.5);
+  const nBlue = fbmNode(dir.mul(5.0).add(vec3(0.0, 27.3, 9.1)), TIER.octaves).mul(0.5).add(0.5);
+  const nMag  = fbmNode(dir.mul(4.0).add(vec3(51.0, 3.3, 17.7)), Math.max(TIER.octaves - 1, 2)).mul(0.5).add(0.5);
 
   col.addAssign(vec3(0.95, 0.62, 0.25).mul(pow(nGold, float(3.2))).mul(band).mul(0.85));
   col.addAssign(vec3(0.12, 0.20, 0.50).mul(pow(nBlue, float(2.6))).mul(band.mul(0.6).add(0.15)));
   col.addAssign(vec3(0.45, 0.15, 0.40).mul(pow(nMag,  float(4.0))).mul(band).mul(0.35));
 
-  // Dust lanes: dark filaments cutting through the band
-  const dust = pow(fbm(dir.mul(7.0).add(vec3(80.0, 80.0, 80.0)), TIER.octaves).mul(0.5).add(0.5), float(3.0)).mul(band);
+  const dust = pow(fbmNode(dir.mul(7.0).add(vec3(80.0, 80.0, 80.0)), TIER.octaves).mul(0.5).add(0.5), float(3.0)).mul(band);
   col.mulAssign(float(1.0).sub(dust.mul(0.65)));
 
-  // Sun glow baked in so the environment map lights with it.
-  // (The crisp disc is drawn live in the display shader; this soft
-  //  bake underneath doubles as its halo.)
+  // Soft sun glow baked in so the env map lights with it;
+  // the crisp disc is drawn live in the display shader.
   const sd = dot(dir, uSunDir);
   const corona = pow(max(sd, 0.0), float(64.0)).mul(0.9)
            .add(pow(max(sd, 0.0), float(8.0)).mul(0.08));
@@ -285,27 +277,21 @@ const skyBakeNode = Fn(() => {
 const skyBakeMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
 skyBakeMat.colorNode = skyBakeNode();
 
-// --- Cube target + bake scene ---
 const cubeRT = new THREE.WebGLCubeRenderTarget(TIER.cube, { type: THREE.HalfFloatType });
 const cubeCam = new THREE.CubeCamera(0.1, 2000, cubeRT);
 
 const skyGeo = new THREE.SphereGeometry(900, 64, 32);
-
-const skyScene = new THREE.Scene(); // isolated scene, only rendered during bakes
+const skyScene = new THREE.Scene();
 skyScene.add(new THREE.Mesh(skyGeo, skyBakeMat));
 skyScene.add(cubeCam);
 
-// --- DISPLAY shader: cube fetch + live stars + live sun disc ---
 const skyDisplayNode = Fn(() => {
   const dir = normalize(positionLocal);
   const col = cubeTexture(cubeRT.texture, dir).rgb.toVar();
-
   col.addAssign(starLayer(dir));
-
   const sd = dot(dir, uSunDir);
   const disc = smoothstep(float(0.99955), float(0.99985), sd).mul(30.0);
   col.addAssign(vec3(1.0, 0.85, 0.6).mul(disc));
-
   return vec4(col, 1.0);
 });
 
@@ -315,14 +301,15 @@ skyDisplayMat.colorNode = skyDisplayNode();
 const scene = new THREE.Scene();
 scene.add(new THREE.Mesh(skyGeo, skyDisplayMat));
 
-/* --- PMREM environment from the baked cube --------------------------
-   If pmremTexture misbehaves on a given three version/backend, the
-   raw cube texture fallback keeps the bench alive (reflections will
-   just be sharper than they should).
---------------------------------------------------------------------- */
 let envApplied = false;
 function bakeEnvironment() {
+  // CRITICAL: bake in linear. AgX must be applied exactly once, at the
+  // final canvas pass — baking with tone mapping on then displaying
+  // through tone mapping again double-applies it and fogs the sky.
+  const tm = renderer.toneMapping;
+  renderer.toneMapping = THREE.NoToneMapping;
   cubeCam.update(renderer, skyScene);
+  renderer.toneMapping = tm;
   if (!envApplied) {
     try {
       scene.environmentNode = pmremTexture(cubeRT.texture);
@@ -335,27 +322,222 @@ function bakeEnvironment() {
 }
 
 /* ============================================================
-   TEST SUBJECTS — three PBR spheres to judge the environment:
-   polished metal, rough rock, glossy dielectric ("water ball").
-   The disc-world replaces these in Step 3.
+   STEP 3a — WORLD GEOMETRY (CPU, seeded)
+   Port of the sketch's polar-grid disc: 84 rings x 220 segs
+   top surface, jagged rock skirt, bottom point. Heights baked
+   into positions; biomes now live in the SHADER, not vertex
+   colors. Future WorldGeometry module.
    ============================================================ */
-const sphereGeo = new THREE.SphereGeometry(0.8, 64, 32);
-[
-  new THREE.MeshStandardMaterial({ color: 0xd8d8d8, metalness: 1.0, roughness: 0.08 }),
-  new THREE.MeshStandardMaterial({ color: 0x6b5f4d, metalness: 0.0, roughness: 0.85 }),
-  new THREE.MeshStandardMaterial({ color: 0x0d2233, metalness: 0.0, roughness: 0.05 }),
-].forEach((mat, i) => {
-  const m = new THREE.Mesh(sphereGeo, mat);
-  m.position.set((i - 1) * 2.2, 0, 0);
-  scene.add(m);
-});
+const RINGS = 84, SEGS = 220, RADIUS = 2.4;
+const SKIRT_ROWS = 5, SKIRT_BOTTOM = -1.25, TIP_Y = -1.55;
+
+function makeSeededNoise(seed) {
+  const h = (x, y) => {
+    const s = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453123;
+    return s - Math.floor(s);
+  };
+  const sm = t => t * t * (3 - 2 * t);
+  const vn = (x, y) => {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const a = h(xi, yi), b = h(xi + 1, yi), c = h(xi, yi + 1), d = h(xi + 1, yi + 1);
+    const u = sm(xf), v = sm(yf);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+  const fbm = (x, y, oct) => {
+    let v = 0, amp = 0.5, f = 1;
+    for (let i = 0; i < oct; i++) { v += amp * vn(x * f, y * f); f *= 2.03; amp *= 0.5; }
+    return v; // ~0..0.97, mean ~0.48
+  };
+  return { fbm, vn };
+}
+
+function buildWorldGeometry(seed) {
+  const noise = makeSeededNoise(seed);
+
+  const heightAt = (x, z) => {
+    // ~3-4 continent features per diameter (0.55 was one giant slope)
+    let hgt = (noise.fbm(x * 1.25 + 9.2, z * 1.25 + 3.1, 5) - 0.48) * 1.35;
+    hgt += (noise.fbm(x * 3.4 + 40.0, z * 3.4 + 40.0, 4) - 0.48) * 0.4; // detail
+    return hgt * 0.62; // roughly -0.45 .. +0.45, sea at 0
+  };
+
+  const positions = [];
+  const indices = [];
+
+  // --- Top surface: polar grid, wrap-indexed (no seam duplicates) ---
+  for (let r = 0; r <= RINGS; r++) {
+    const rad = (r / RINGS) * RADIUS;
+    for (let s = 0; s < SEGS; s++) {
+      const a = (s / SEGS) * Math.PI * 2;
+      const x = Math.cos(a) * rad, z = Math.sin(a) * rad;
+      positions.push(x, heightAt(x, z), z);
+    }
+  }
+  const topIdx = (r, s) => r * SEGS + (s % SEGS);
+  for (let r = 0; r < RINGS; r++) {
+    for (let s = 0; s < SEGS; s++) {
+      const a = topIdx(r, s), b = topIdx(r + 1, s), c = topIdx(r + 1, s + 1), d = topIdx(r, s + 1);
+      indices.push(a, b, c, a, c, d);
+    }
+  }
+
+  // --- Rock skirt: descending noise-jagged rings from the rim ---
+  const skirtStart = positions.length / 3;
+  const profile = [1.03, 1.045, 0.99, 0.86, 0.56]; // radius multipliers per row
+  for (let t = 0; t < SKIRT_ROWS; t++) {
+    const f = (t + 1) / SKIRT_ROWS;
+    for (let s = 0; s < SEGS; s++) {
+      const a = (s / SEGS) * Math.PI * 2;
+      const rimH = positions[topIdx(RINGS, s) * 3 + 1];
+      const jag = (noise.vn(s * 0.35, t * 2.7) - 0.5) * 0.16 * (0.4 + f);
+      const rad = RADIUS * profile[t] + jag;
+      const y = rimH + (SKIRT_BOTTOM - rimH) * f + (noise.vn(s * 0.9, t * 5.1) - 0.5) * 0.1;
+      positions.push(Math.cos(a) * rad, y, Math.sin(a) * rad);
+    }
+  }
+  const skirtIdx = (t, s) => skirtStart + t * SEGS + (s % SEGS);
+  for (let s = 0; s < SEGS; s++) { // rim -> first skirt row
+    const a = topIdx(RINGS, s), b = skirtIdx(0, s), c = skirtIdx(0, s + 1), d = topIdx(RINGS, s + 1);
+    indices.push(a, b, c, a, c, d);
+  }
+  for (let t = 0; t < SKIRT_ROWS - 1; t++) {
+    for (let s = 0; s < SEGS; s++) {
+      const a = skirtIdx(t, s), b = skirtIdx(t + 1, s), c = skirtIdx(t + 1, s + 1), d = skirtIdx(t, s + 1);
+      indices.push(a, b, c, a, c, d);
+    }
+  }
+  // --- Bottom point fan ---
+  const tip = positions.length / 3;
+  positions.push(0, TIP_Y, 0);
+  for (let s = 0; s < SEGS; s++) {
+    indices.push(skirtIdx(SKIRT_ROWS - 1, s), tip, skirtIdx(SKIRT_ROWS - 1, s + 1));
+  }
+
+  // Winding fix: as generated, radial-cross-tangential faces DOWN
+  // (normals inverted, top surface culled from above). Reverse every
+  // triangle so all faces point outward.
+  for (let i = 0; i < indices.length; i += 3) {
+    const t = indices[i + 1];
+    indices[i + 1] = indices[i + 2];
+    indices[i + 2] = t;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
 
 /* ============================================================
-   LIGHTING — directional sun slaved to uSunDir + faint ambient.
-   Night handling is minimal here; Step 2 adds the moon.
+   STEP 3b — TERRAIN MATERIAL (TSL)
+   Height-band biomes + slope rock + moisture stub, computed
+   per-pixel from local position/normal (rotation-proof for the
+   future XR grab). All-procedural, so 3D noise is inherently
+   seamless — true triplanar arrives only when texture maps do.
+   Future TerrainMaterial module.
    ============================================================ */
+const uSeaLevel = uniform(0.0);
+const uMoisture = uniform(0.0);
+
+const BIOME = {
+  abyss:  vec3(0.030, 0.075, 0.105),
+  sand:   vec3(0.760, 0.680, 0.490),
+  grass:  vec3(0.330, 0.470, 0.220),
+  forest: vec3(0.165, 0.340, 0.190),
+  rock:   vec3(0.420, 0.400, 0.370),
+  cliff:  vec3(0.300, 0.280, 0.260),
+  snow:   vec3(0.900, 0.925, 0.950),
+};
+
+const terrainColorNode = Fn(() => {
+  const h = positionLocal.y;
+  const slope = float(1.0).sub(max(normalLocal.y, 0.0));
+
+  // Band-edge breakup so biome borders wander naturally
+  const breakup = mx_noise_float(positionLocal.mul(6.0)).mul(0.5).add(0.5);
+  const hh = h.sub(uSeaLevel).add(breakup.sub(0.5).mul(0.07)).toVar();
+
+  const col = mix(BIOME.abyss, BIOME.sand, smoothstep(float(-0.22), float(-0.01), hh)).toVar();
+  col.assign(mix(col, BIOME.grass,  smoothstep(float(0.012), float(0.05), hh)));
+  col.assign(mix(col, BIOME.forest, smoothstep(float(0.09),  float(0.17), hh).mul(breakup.mul(0.6).add(0.4))));
+  col.assign(mix(col, BIOME.rock,   smoothstep(float(0.21),  float(0.30), hh)));
+  col.assign(mix(col, BIOME.snow,   smoothstep(float(0.30),  float(0.38), hh)));
+
+  // Steep faces read as cliff rock regardless of band (also covers the skirt)
+  col.assign(mix(col, BIOME.cliff, smoothstep(float(0.35), float(0.65), slope)));
+
+  // Fine tonal grain (skipped on the low tier)
+  if (TIER.detail) {
+    const grain = mx_noise_float(positionLocal.mul(24.0)).mul(0.5).add(0.5);
+    col.mulAssign(grain.mul(0.18).add(0.91));
+  }
+
+  // Moisture stub — Phase 2 replaces this global with a per-texel map.
+  // Darkens the vegetated/sand bands toward lush wet tones.
+  const vegMask = smoothstep(float(-0.04), float(0.02), hh).mul(smoothstep(float(0.24), float(0.12), hh));
+  col.assign(mix(col, col.mul(vec3(0.52, 0.62, 0.50)), uMoisture.mul(vegMask)));
+
+  // Depth darkening below the world floor (skirt undershadow)
+  col.mulAssign(smoothstep(float(-1.7), float(-0.15), h).mul(0.78).add(0.22));
+
+  return col;
+});
+
+const terrainRoughnessNode = Fn(() => {
+  const h = positionLocal.y;
+  const breakup = mx_noise_float(positionLocal.mul(6.0)).mul(0.5).add(0.5);
+  const hh = h.sub(uSeaLevel).add(breakup.sub(0.5).mul(0.07));
+  const snowMask = smoothstep(float(0.30), float(0.38), hh);
+  const sandMask = smoothstep(float(-0.22), float(-0.01), hh).mul(smoothstep(float(0.05), float(0.012), hh));
+  const r = float(0.93).toVar();
+  r.assign(mix(r, float(0.55), snowMask)); // snow slightly glossy under the nebula
+  r.assign(mix(r, float(0.78), sandMask));
+  return r;
+});
+
+const terrainMat = new THREE.MeshStandardNodeMaterial({ metalness: 0.0 });
+terrainMat.colorNode = terrainColorNode();
+terrainMat.roughnessNode = terrainRoughnessNode();
+
+const world = new THREE.Mesh(buildWorldGeometry(SEED), terrainMat);
+scene.add(world);
+
+/* ============================================================
+   STEP 3c — SEA PLACEHOLDER
+   Deliberately dumb: a glossy StandardMaterial disc. Under the
+   PMREM nebula it previews Step 4's reflective ceiling for
+   free. The real TSL water (absorption, foam, refraction)
+   replaces this in Step 4.
+   ============================================================ */
+const seaMat = new THREE.MeshStandardMaterial({
+  color: 0x08304a, metalness: 0.0, roughness: 0.12,
+  transparent: true, opacity: 0.88,
+});
+const sea = new THREE.Mesh(new THREE.CircleGeometry(RADIUS * 0.998, 160), seaMat);
+sea.rotation.x = -Math.PI / 2;
+scene.add(sea);
+
+/* ============================================================
+   STEP 2 — MOON + DAY CYCLE
+   Moon rides the anti-sun axis: rises as the sun sets.
+   Cool directional moonlight fades in at night.
+   ============================================================ */
+const moonMat = new THREE.MeshBasicNodeMaterial();
+moonMat.colorNode = Fn(() => {
+  const p = positionLocal.mul(0.15);
+  const mottle = mx_noise_float(p).mul(0.5).add(0.5).mul(0.25)
+           .add(mx_noise_float(p.mul(3.7)).mul(0.5).add(0.5).mul(0.12));
+  return vec3(0.82, 0.84, 0.90).mul(float(0.75).add(mottle));
+})();
+const moon = new THREE.Mesh(new THREE.SphereGeometry(28, 32, 16), moonMat);
+scene.add(moon);
+
 const sunLight = new THREE.DirectionalLight(0xfff0dd, 3.0);
 scene.add(sunLight);
+const moonLight = new THREE.DirectionalLight(0x8fb0e0, 0.0);
+scene.add(moonLight);
 const ambient = new THREE.AmbientLight(0x223344, 0.15);
 scene.add(ambient);
 
@@ -363,25 +545,28 @@ scene.add(ambient);
    CAMERA + CONTROLS
    ============================================================ */
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2000);
-camera.position.set(0, 1.2, 6);
+camera.position.set(0, 2.4, 5.6);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 2;
+controls.minDistance = 1.5;
 controls.maxDistance = 40;
+controls.target.set(0, 0, 0);
 
 /* ============================================================
-   UI WIRING — quality tier, sun, exposure, env re-bake throttle
+   UI WIRING
    ============================================================ */
 const els = {
-  q:  document.getElementById('s-q'),  vQ:  document.getElementById('v-q'),
-  az: document.getElementById('s-az'), vAz: document.getElementById('v-az'),
-  el: document.getElementById('s-el'), vEl: document.getElementById('v-el'),
-  ex: document.getElementById('s-ex'), vEx: document.getElementById('v-ex'),
+  q:   document.getElementById('s-q'),   vQ:   document.getElementById('v-q'),
+  az:  document.getElementById('s-az'),  vAz:  document.getElementById('v-az'),
+  el:  document.getElementById('s-el'),  vEl:  document.getElementById('v-el'),
+  sea: document.getElementById('s-sea'), vSea: document.getElementById('v-sea'),
+  wet: document.getElementById('s-wet'), vWet: document.getElementById('v-wet'),
+  ex:  document.getElementById('s-ex'),  vEx:  document.getElementById('v-ex'),
+  cycle: document.getElementById('c-cycle'),
+  rAz: document.getElementById('r-az'), rEl: document.getElementById('r-el'),
 };
 
-// Quality tier: shader octave counts are fixed at node-construction
-// time, so switching tiers is a clean reload with ?q=.
 els.q.value = tierName;
 els.vQ.textContent = qParam ? 'forced' : 'auto';
 els.q.addEventListener('change', () => {
@@ -393,11 +578,11 @@ els.q.addEventListener('change', () => {
 let envDirty = true;
 let lastBake = 0;
 
-function applySun() {
-  const az = THREE.MathUtils.degToRad(parseFloat(els.az.value));
-  const el = THREE.MathUtils.degToRad(parseFloat(els.el.value));
-  els.vAz.textContent = els.az.value + '°';
-  els.vEl.textContent = els.el.value + '°';
+function setSun(azDeg, elDeg) {
+  const az = THREE.MathUtils.degToRad(azDeg);
+  const el = THREE.MathUtils.degToRad(elDeg);
+  els.vAz.textContent = Math.round(azDeg) + '°';
+  els.vEl.textContent = Math.round(elDeg) + '°';
 
   const d = new THREE.Vector3(
     Math.cos(el) * Math.sin(az),
@@ -406,43 +591,77 @@ function applySun() {
   );
   uSunDir.value.copy(d);
   sunLight.position.copy(d).multiplyScalar(100);
+  moon.position.copy(d).multiplyScalar(-760);
+  moonLight.position.copy(d).multiplyScalar(-100);
 
-  // Fade the directional light out as the sun sinks below the horizon
   const horizon = THREE.MathUtils.smoothstep(Math.sin(el), -0.08, 0.12);
   sunLight.intensity = 3.0 * horizon;
-  ambient.intensity = 0.15 + 0.1 * (1 - horizon); // slightly bluer-brighter ambience at night
+  moonLight.intensity = 0.55 * (1 - horizon);
+  ambient.intensity = 0.15 + 0.1 * (1 - horizon);
 
   envDirty = true;
 }
 
+const applySunFromSliders = () =>
+  setSun(parseFloat(els.az.value), parseFloat(els.el.value));
+
+function applySea() {
+  const v = parseFloat(els.sea.value);
+  uSeaLevel.value = v;
+  sea.position.y = v;
+  els.vSea.textContent = v.toFixed(2);
+}
+function applyMoisture() {
+  uMoisture.value = parseFloat(els.wet.value);
+  els.vWet.textContent = parseFloat(els.wet.value).toFixed(2);
+}
 function applyExposure() {
   renderer.toneMappingExposure = parseFloat(els.ex.value);
   els.vEx.textContent = parseFloat(els.ex.value).toFixed(2);
 }
 
-els.az.addEventListener('input', applySun);
-els.el.addEventListener('input', applySun);
+els.az.addEventListener('input', applySunFromSliders);
+els.el.addEventListener('input', applySunFromSliders);
+els.sea.addEventListener('input', applySea);
+els.wet.addEventListener('input', applyMoisture);
 els.ex.addEventListener('input', applyExposure);
-applySun();
+
+// Day cycle: one full day = 90s. Continuous env re-bakes at the
+// tier's throttle — this is the honest test of an in-game moving sun.
+let dayPhase = parseFloat(els.az.value);
+els.cycle.addEventListener('change', () => {
+  const on = els.cycle.checked;
+  els.rAz.classList.toggle('dim', on);
+  els.rEl.classList.toggle('dim', on);
+  if (!on) applySunFromSliders();
+});
+
+applySunFromSliders();
+applySea();
+applyMoisture();
 applyExposure();
 
 /* ============================================================
-   PERF HUD
+   PERF HUD + MAIN LOOP
    ============================================================ */
 const perfEl = document.getElementById('perf');
 let frames = 0, perfLast = performance.now(), msAccum = 0;
-
-/* ============================================================
-   MAIN LOOP
-   ============================================================ */
 let prev = performance.now();
+
 renderer.setAnimationLoop(() => {
   const now = performance.now();
+  const dt = (now - prev) / 1000;
   const frameMs = now - prev;
   prev = now;
 
-  // Throttled environment re-bake (sun moved). The expensive
-  // procedural shader ONLY runs inside this branch.
+  if (els.cycle.checked) {
+    dayPhase = (dayPhase + dt * 4.0) % 360; // 90s per day
+    const elDeg = Math.sin(THREE.MathUtils.degToRad(dayPhase)) * 45 + 10;
+    els.az.value = dayPhase.toFixed(0);
+    els.el.value = elDeg.toFixed(0);
+    setSun(dayPhase, elDeg);
+  }
+
   if (envDirty && now - lastBake > TIER.bakeMs) {
     bakeEnvironment();
     lastBake = now;
@@ -452,7 +671,6 @@ renderer.setAnimationLoop(() => {
   controls.update();
   renderer.render(scene, camera);
 
-  // Perf HUD @2Hz
   frames++;
   msAccum += frameMs;
   if (now - perfLast > 500) {
