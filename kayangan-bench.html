@@ -65,6 +65,12 @@
     width: 11px; height: 11px; border-radius: 50%; border: none;
     background: var(--gold); cursor: pointer;
   }
+  select {
+    width: 100%; background: rgba(8, 9, 16, 0.9); color: var(--gold);
+    border: 1px solid rgba(201, 161, 90, 0.35); padding: 4px 6px;
+    font-family: inherit; font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
   #panel .hint {
     font-size: 10px; color: rgba(232, 226, 213, 0.35);
     border-top: 1px solid rgba(201, 161, 90, 0.2);
@@ -97,6 +103,14 @@
   <h1>Kayangan</h1>
   <div class="sub">Visual Bench · Step 0–1</div>
   <div class="row">
+    <label>Quality <span id="v-q"></span></label>
+    <select id="s-q">
+      <option value="high">High — desktop</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low — mobile / Quest</option>
+    </select>
+  </div>
+  <div class="row">
     <label>Sun azimuth <span id="v-az">40°</span></label>
     <input id="s-az" type="range" min="0" max="360" step="1" value="40">
   </div>
@@ -110,7 +124,8 @@
   </div>
   <div class="hint">
     Drag to orbit · wheel to zoom.<br>
-    Append <code>?forcewebgl</code> to the URL to test the WebGL2 fallback path.
+    <code>?forcewebgl</code> tests the WebGL2 path ·
+    <code>?q=low|medium|high</code> forces a tier.
   </div>
 </div>
 
@@ -128,20 +143,35 @@ import {
   Fn, float, vec3, vec4, uniform,
   positionLocal, normalize, dot, pow, max, exp, abs,
   mix, smoothstep, fract, sin, floor, length,
-  mx_noise_float, pmremTexture
+  mx_noise_float, pmremTexture, cubeTexture
 } from 'three/tsl';
+
+/* ============================================================
+   QUALITY TIERS — pulled forward from Step 6 after real-device
+   testing (Samsung A06 / Quest 2 @ 9fps on the naive build).
+   Auto-detected from UA, overridable via ?q= or the dropdown.
+   ============================================================ */
+const TIERS = {
+  high:   { octaves: 5, cube: 1024, pixelRatio: 2.0, bakeMs: 250, antialias: true  },
+  medium: { octaves: 4, cube: 512,  pixelRatio: 1.5, bakeMs: 450, antialias: true  },
+  low:    { octaves: 3, cube: 256,  pixelRatio: 1.0, bakeMs: 900, antialias: false },
+};
+const search = new URLSearchParams(location.search);
+const qParam = search.get('q');
+const autoTier = /Quest|Android|Mobile/i.test(navigator.userAgent) ? 'low' : 'high';
+const tierName = TIERS[qParam] ? qParam : autoTier;
+const TIER = TIERS[tierName];
 
 /* ============================================================
    STEP 0 — HARNESS
    Renderer boot with WebGPU detection + WebGL2 fallback,
    backend badge, perf HUD, AgX tone mapping from frame one.
    ============================================================ */
-
-const forceWebGL = new URLSearchParams(location.search).has('forcewebgl');
+const forceWebGL = search.has('forcewebgl');
 
 let renderer;
 try {
-  renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL });
+  renderer = new THREE.WebGPURenderer({ antialias: TIER.antialias, forceWebGL });
   await renderer.init();
 } catch (err) {
   bootFail('Renderer failed to initialise. ' + err.message +
@@ -149,7 +179,7 @@ try {
   throw err;
 }
 
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, TIER.pixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.AgXToneMapping;   // graded correctly from frame one
 renderer.toneMappingExposure = 1.0;
@@ -158,7 +188,7 @@ document.body.appendChild(renderer.domElement);
 // Backend badge — the single source of truth for which path we're on.
 const isWebGPU = !!(renderer.backend && renderer.backend.isWebGPUBackend);
 const badge = document.getElementById('backend');
-badge.textContent = isWebGPU ? 'WEBGPU' : 'WEBGL2';
+badge.textContent = (isWebGPU ? 'WEBGPU' : 'WEBGL2') + ' · ' + tierName.toUpperCase();
 badge.classList.toggle('webgl', !isWebGPU);
 
 // Some embedded/preview environments stub console partially — guard everything.
@@ -171,14 +201,21 @@ function bootFail(msg) {
 }
 
 /* ============================================================
-   STEP 1 — NEBULA SKY (TSL)
-   The sky is the light source: one node material, rendered
-   (a) as the visible background dome and
-   (b) into a cube target -> PMREM -> scene environment.
+   STEP 1 — NEBULA SKY (TSL), BAKED-STATIC ARCHITECTURE
+
+   Perf lesson from real devices: the procedural nebula
+   (~19 noise calls/pixel) must NEVER run per-frame on screen.
+
+   - BAKE material: full procedural nebula + sun. Rendered only
+     into the cube target when the sun moves (throttled).
+   - DISPLAY material: one cube-texture fetch + live stars +
+     live crisp sun disc (hashes and dot products — nearly free).
+   - Environment: pmremTexture(cube) for PBR lighting.
+
    This whole block lifts into the future SkyEnv module.
    ============================================================ */
 
-// --- Uniforms shared between sky shader and JS ---
+// --- Uniforms shared between sky shaders and JS ---
 const uSunDir = uniform(new THREE.Vector3(0, 0.5, -1).normalize());
 
 // --- TSL helpers ---
@@ -187,7 +224,7 @@ const hash3 = Fn(([p]) =>
 );
 
 // fbm built in JS: composes a fixed-octave node chain at construction time.
-function fbm(p, octaves = 5) {
+function fbm(p, octaves) {
   let value = float(0);
   let amp = 0.5;
   let q = p;
@@ -199,8 +236,19 @@ function fbm(p, octaves = 5) {
   return value; // roughly [-1, 1]
 }
 
-// --- The sky itself ---
-const skyColorNode = Fn(() => {
+// Live star layer — cheap enough to run per-frame at any tier.
+const starLayer = Fn(([dir]) => {
+  const cell = dir.mul(140.0);
+  const id = floor(cell);
+  const presence = smoothstep(float(0.988), float(1.0), hash3(id));
+  const d = length(fract(cell).sub(0.5));
+  const glow = pow(smoothstep(float(0.34), float(0.0), d), float(2.0));
+  const tint = mix(vec3(0.70, 0.80, 1.00), vec3(1.00, 0.88, 0.66), hash3(id.add(vec3(7.3, 1.1, 3.9))));
+  return tint.mul(presence).mul(glow).mul(2.2);
+});
+
+// --- BAKE shader: the expensive nebula, evaluated only during bakes ---
+const skyBakeNode = Fn(() => {
   const dir = normalize(positionLocal);
 
   // Deep-space base
@@ -211,59 +259,67 @@ const skyColorNode = Fn(() => {
   const band = exp(abs(dot(dir, bandN)).mul(-4.0));
 
   // Nebula layers — gold identity first, blue depth second, magenta whisper
-  const nGold = fbm(dir.mul(3.0).add(vec3(13.7, 0.0, 4.1)), 5).mul(0.5).add(0.5);
-  const nBlue = fbm(dir.mul(5.0).add(vec3(0.0, 27.3, 9.1)), 5).mul(0.5).add(0.5);
-  const nMag  = fbm(dir.mul(4.0).add(vec3(51.0, 3.3, 17.7)), 4).mul(0.5).add(0.5);
+  const nGold = fbm(dir.mul(3.0).add(vec3(13.7, 0.0, 4.1)), TIER.octaves).mul(0.5).add(0.5);
+  const nBlue = fbm(dir.mul(5.0).add(vec3(0.0, 27.3, 9.1)), TIER.octaves).mul(0.5).add(0.5);
+  const nMag  = fbm(dir.mul(4.0).add(vec3(51.0, 3.3, 17.7)), Math.max(TIER.octaves - 1, 2)).mul(0.5).add(0.5);
 
   col.addAssign(vec3(0.95, 0.62, 0.25).mul(pow(nGold, float(3.2))).mul(band).mul(0.85));
   col.addAssign(vec3(0.12, 0.20, 0.50).mul(pow(nBlue, float(2.6))).mul(band.mul(0.6).add(0.15)));
   col.addAssign(vec3(0.45, 0.15, 0.40).mul(pow(nMag,  float(4.0))).mul(band).mul(0.35));
 
   // Dust lanes: dark filaments cutting through the band
-  const dust = pow(fbm(dir.mul(7.0).add(vec3(80.0, 80.0, 80.0)), 5).mul(0.5).add(0.5), float(3.0)).mul(band);
+  const dust = pow(fbm(dir.mul(7.0).add(vec3(80.0, 80.0, 80.0)), TIER.octaves).mul(0.5).add(0.5), float(3.0)).mul(band);
   col.mulAssign(float(1.0).sub(dust.mul(0.65)));
 
-  // Stars: hashed grid cells with round falloff + warm/cool tint variation
-  const cell = dir.mul(140.0);
-  const id = floor(cell);
-  const presence = smoothstep(float(0.988), float(1.0), hash3(id));
-  const d = length(fract(cell).sub(0.5));
-  const glow = pow(smoothstep(float(0.34), float(0.0), d), float(2.0));
-  const tint = mix(vec3(0.70, 0.80, 1.00), vec3(1.00, 0.88, 0.66), hash3(id.add(vec3(7.3, 1.1, 3.9))));
-  col.addAssign(tint.mul(presence).mul(glow).mul(2.2));
-
-  // Sun: hot disc + corona, baked into the sky so the env map lights with it
+  // Sun glow baked in so the environment map lights with it.
+  // (The crisp disc is drawn live in the display shader; this soft
+  //  bake underneath doubles as its halo.)
   const sd = dot(dir, uSunDir);
-  const disc = smoothstep(float(0.99955), float(0.99985), sd).mul(30.0);
-  const corona = pow(max(sd, 0.0), float(64.0)).mul(0.55)
-           .add(pow(max(sd, 0.0), float(8.0)).mul(0.06));
-  col.addAssign(vec3(1.0, 0.85, 0.6).mul(disc.add(corona)));
+  const corona = pow(max(sd, 0.0), float(64.0)).mul(0.9)
+           .add(pow(max(sd, 0.0), float(8.0)).mul(0.08));
+  col.addAssign(vec3(1.0, 0.85, 0.6).mul(corona));
 
   return vec4(col, 1.0);
 });
 
-// One material, two domes: visible sky + bake-only sky.
-const skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
-skyMat.colorNode = skyColorNode();
+const skyBakeMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
+skyBakeMat.colorNode = skyBakeNode();
+
+// --- Cube target + bake scene ---
+const cubeRT = new THREE.WebGLCubeRenderTarget(TIER.cube, { type: THREE.HalfFloatType });
+const cubeCam = new THREE.CubeCamera(0.1, 2000, cubeRT);
 
 const skyGeo = new THREE.SphereGeometry(900, 64, 32);
 
-const scene = new THREE.Scene();
-scene.add(new THREE.Mesh(skyGeo, skyMat));
-
-const skyScene = new THREE.Scene(); // isolated scene for the cube bake
-skyScene.add(new THREE.Mesh(skyGeo, skyMat));
-
-/* --- PMREM environment from the sky ---------------------------------
-   CubeCamera renders skyScene into a cube target; pmremTexture()
-   prefilters it for rough reflections. If pmremTexture misbehaves on
-   a given three version/backend, the raw cube texture fallback keeps
-   the bench alive (reflections will just be sharper than they should).
---------------------------------------------------------------------- */
-const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
-const cubeCam = new THREE.CubeCamera(0.1, 2000, cubeRT);
+const skyScene = new THREE.Scene(); // isolated scene, only rendered during bakes
+skyScene.add(new THREE.Mesh(skyGeo, skyBakeMat));
 skyScene.add(cubeCam);
 
+// --- DISPLAY shader: cube fetch + live stars + live sun disc ---
+const skyDisplayNode = Fn(() => {
+  const dir = normalize(positionLocal);
+  const col = cubeTexture(cubeRT.texture, dir).rgb.toVar();
+
+  col.addAssign(starLayer(dir));
+
+  const sd = dot(dir, uSunDir);
+  const disc = smoothstep(float(0.99955), float(0.99985), sd).mul(30.0);
+  col.addAssign(vec3(1.0, 0.85, 0.6).mul(disc));
+
+  return vec4(col, 1.0);
+});
+
+const skyDisplayMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
+skyDisplayMat.colorNode = skyDisplayNode();
+
+const scene = new THREE.Scene();
+scene.add(new THREE.Mesh(skyGeo, skyDisplayMat));
+
+/* --- PMREM environment from the baked cube --------------------------
+   If pmremTexture misbehaves on a given three version/backend, the
+   raw cube texture fallback keeps the bench alive (reflections will
+   just be sharper than they should).
+--------------------------------------------------------------------- */
 let envApplied = false;
 function bakeEnvironment() {
   cubeCam.update(renderer, skyScene);
@@ -284,15 +340,14 @@ function bakeEnvironment() {
    The disc-world replaces these in Step 3.
    ============================================================ */
 const sphereGeo = new THREE.SphereGeometry(0.8, 64, 32);
-const subjects = [
+[
   new THREE.MeshStandardMaterial({ color: 0xd8d8d8, metalness: 1.0, roughness: 0.08 }),
   new THREE.MeshStandardMaterial({ color: 0x6b5f4d, metalness: 0.0, roughness: 0.85 }),
   new THREE.MeshStandardMaterial({ color: 0x0d2233, metalness: 0.0, roughness: 0.05 }),
-].map((mat, i) => {
+].forEach((mat, i) => {
   const m = new THREE.Mesh(sphereGeo, mat);
   m.position.set((i - 1) * 2.2, 0, 0);
   scene.add(m);
-  return m;
 });
 
 /* ============================================================
@@ -316,17 +371,27 @@ controls.minDistance = 2;
 controls.maxDistance = 40;
 
 /* ============================================================
-   UI WIRING — sun azimuth/elevation, exposure, env re-bake throttle
+   UI WIRING — quality tier, sun, exposure, env re-bake throttle
    ============================================================ */
 const els = {
+  q:  document.getElementById('s-q'),  vQ:  document.getElementById('v-q'),
   az: document.getElementById('s-az'), vAz: document.getElementById('v-az'),
   el: document.getElementById('s-el'), vEl: document.getElementById('v-el'),
   ex: document.getElementById('s-ex'), vEx: document.getElementById('v-ex'),
 };
 
+// Quality tier: shader octave counts are fixed at node-construction
+// time, so switching tiers is a clean reload with ?q=.
+els.q.value = tierName;
+els.vQ.textContent = qParam ? 'forced' : 'auto';
+els.q.addEventListener('change', () => {
+  const u = new URL(location.href);
+  u.searchParams.set('q', els.q.value);
+  location.href = u.toString();
+});
+
 let envDirty = true;
 let lastBake = 0;
-const BAKE_INTERVAL_MS = 250; // re-bake throttle while dragging the sun
 
 function applySun() {
   const az = THREE.MathUtils.degToRad(parseFloat(els.az.value));
@@ -376,8 +441,9 @@ renderer.setAnimationLoop(() => {
   const frameMs = now - prev;
   prev = now;
 
-  // Throttled environment re-bake (sun moved)
-  if (envDirty && now - lastBake > BAKE_INTERVAL_MS) {
+  // Throttled environment re-bake (sun moved). The expensive
+  // procedural shader ONLY runs inside this branch.
+  if (envDirty && now - lastBake > TIER.bakeMs) {
     bakeEnvironment();
     lastBake = now;
     envDirty = false;
