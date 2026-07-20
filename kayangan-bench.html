@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kayangan — Visual Bench</title>
+<style>
+  :root {
+    --gold: #c9a15a;
+    --gold-dim: #8a6d3b;
+    --ink: #e8e2d5;
+    --panel: rgba(8, 9, 16, 0.78);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #04050a; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: var(--ink); }
+  canvas { display: block; }
+
+  /* ---- Backend badge + perf HUD (top right) ---- */
+  #hud {
+    position: fixed; top: 14px; right: 16px; text-align: right;
+    pointer-events: none; user-select: none;
+  }
+  #backend {
+    display: inline-block; letter-spacing: 0.22em; font-size: 11px;
+    padding: 4px 10px; border: 1px solid var(--gold-dim);
+    color: var(--gold); background: var(--panel);
+  }
+  #backend.webgl { color: #7aa7d9; border-color: #3d5a7a; }
+  #perf {
+    margin-top: 6px; font-size: 11px; letter-spacing: 0.12em;
+    color: rgba(232, 226, 213, 0.55);
+  }
+
+  /* ---- Control panel (top left) ---- */
+  #panel {
+    position: fixed; top: 14px; left: 16px; width: 230px;
+    background: var(--panel); border: 1px solid rgba(201, 161, 90, 0.35);
+    padding: 14px 16px 12px;
+  }
+  #panel h1 {
+    font-size: 15px; font-weight: normal; letter-spacing: 0.30em;
+    color: var(--gold); text-transform: uppercase;
+  }
+  #panel .sub {
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: rgba(232, 226, 213, 0.45); margin: 3px 0 12px;
+  }
+  .row { margin-bottom: 10px; }
+  .row label {
+    display: flex; justify-content: space-between;
+    font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: rgba(232, 226, 213, 0.7); margin-bottom: 4px;
+  }
+  .row label span { color: var(--gold); }
+  input[type="range"] {
+    -webkit-appearance: none; width: 100%; height: 2px;
+    background: rgba(201, 161, 90, 0.35); outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--gold); cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 11px; height: 11px; border-radius: 50%; border: none;
+    background: var(--gold); cursor: pointer;
+  }
+  #panel .hint {
+    font-size: 10px; color: rgba(232, 226, 213, 0.35);
+    border-top: 1px solid rgba(201, 161, 90, 0.2);
+    padding-top: 8px; margin-top: 4px; line-height: 1.5;
+  }
+  #panel .hint code { font-family: monospace; color: rgba(201,161,90,0.6); }
+
+  #boot-error {
+    position: fixed; inset: 0; display: none; place-items: center;
+    background: #04050a; text-align: center; padding: 24px;
+  }
+  #boot-error p { max-width: 480px; line-height: 1.6; color: rgba(232,226,213,0.8); }
+</style>
+
+<!-- Pin one known version; bump deliberately, re-test both backends when you do. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.js",
+    "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.webgpu.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.tsl.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="panel">
+  <h1>Kayangan</h1>
+  <div class="sub">Visual Bench · Step 0–1</div>
+  <div class="row">
+    <label>Sun azimuth <span id="v-az">40°</span></label>
+    <input id="s-az" type="range" min="0" max="360" step="1" value="40">
+  </div>
+  <div class="row">
+    <label>Sun elevation <span id="v-el">28°</span></label>
+    <input id="s-el" type="range" min="-30" max="90" step="1" value="28">
+  </div>
+  <div class="row">
+    <label>Exposure <span id="v-ex">1.00</span></label>
+    <input id="s-ex" type="range" min="0.2" max="2.5" step="0.05" value="1.0">
+  </div>
+  <div class="hint">
+    Drag to orbit · wheel to zoom.<br>
+    Append <code>?forcewebgl</code> to the URL to test the WebGL2 fallback path.
+  </div>
+</div>
+
+<div id="hud">
+  <span id="backend">BOOTING…</span>
+  <div id="perf">— fps · — ms</div>
+</div>
+
+<div id="boot-error"><p id="boot-error-msg"></p></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import {
+  Fn, float, vec3, vec4, uniform,
+  positionLocal, normalize, dot, pow, max, exp, abs,
+  mix, smoothstep, fract, sin, floor, length,
+  mx_noise_float, pmremTexture
+} from 'three/tsl';
+
+/* ============================================================
+   STEP 0 — HARNESS
+   Renderer boot with WebGPU detection + WebGL2 fallback,
+   backend badge, perf HUD, AgX tone mapping from frame one.
+   ============================================================ */
+
+const forceWebGL = new URLSearchParams(location.search).has('forcewebgl');
+
+let renderer;
+try {
+  renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL });
+  await renderer.init();
+} catch (err) {
+  bootFail('Renderer failed to initialise. ' + err.message +
+    ' — try a current Chrome/Edge, or append ?forcewebgl to test the fallback path.');
+  throw err;
+}
+
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.AgXToneMapping;   // graded correctly from frame one
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+// Backend badge — the single source of truth for which path we're on.
+const isWebGPU = !!(renderer.backend && renderer.backend.isWebGPUBackend);
+const badge = document.getElementById('backend');
+badge.textContent = isWebGPU ? 'WEBGPU' : 'WEBGL2';
+badge.classList.toggle('webgl', !isWebGPU);
+
+// Some embedded/preview environments stub console partially — guard everything.
+const log = (...a) => { try { (console.log || (() => {}))('[Kayangan bench]', ...a); } catch (_) {} };
+log('backend:', badge.textContent);
+
+function bootFail(msg) {
+  document.getElementById('boot-error').style.display = 'grid';
+  document.getElementById('boot-error-msg').textContent = msg;
+}
+
+/* ============================================================
+   STEP 1 — NEBULA SKY (TSL)
+   The sky is the light source: one node material, rendered
+   (a) as the visible background dome and
+   (b) into a cube target -> PMREM -> scene environment.
+   This whole block lifts into the future SkyEnv module.
+   ============================================================ */
+
+// --- Uniforms shared between sky shader and JS ---
+const uSunDir = uniform(new THREE.Vector3(0, 0.5, -1).normalize());
+
+// --- TSL helpers ---
+const hash3 = Fn(([p]) =>
+  fract(sin(dot(p, vec3(127.1, 311.7, 74.7))).mul(43758.5453123))
+);
+
+// fbm built in JS: composes a fixed-octave node chain at construction time.
+function fbm(p, octaves = 5) {
+  let value = float(0);
+  let amp = 0.5;
+  let q = p;
+  for (let i = 0; i < octaves; i++) {
+    value = value.add(mx_noise_float(q).mul(amp));
+    q = q.mul(2.03);
+    amp *= 0.5;
+  }
+  return value; // roughly [-1, 1]
+}
+
+// --- The sky itself ---
+const skyColorNode = Fn(() => {
+  const dir = normalize(positionLocal);
+
+  // Deep-space base
+  const col = vec3(0.008, 0.010, 0.022).toVar();
+
+  // Galactic band: density falls off away from a tilted plane
+  const bandN = normalize(vec3(0.35, 1.0, 0.18));
+  const band = exp(abs(dot(dir, bandN)).mul(-4.0));
+
+  // Nebula layers — gold identity first, blue depth second, magenta whisper
+  const nGold = fbm(dir.mul(3.0).add(vec3(13.7, 0.0, 4.1)), 5).mul(0.5).add(0.5);
+  const nBlue = fbm(dir.mul(5.0).add(vec3(0.0, 27.3, 9.1)), 5).mul(0.5).add(0.5);
+  const nMag  = fbm(dir.mul(4.0).add(vec3(51.0, 3.3, 17.7)), 4).mul(0.5).add(0.5);
+
+  col.addAssign(vec3(0.95, 0.62, 0.25).mul(pow(nGold, float(3.2))).mul(band).mul(0.85));
+  col.addAssign(vec3(0.12, 0.20, 0.50).mul(pow(nBlue, float(2.6))).mul(band.mul(0.6).add(0.15)));
+  col.addAssign(vec3(0.45, 0.15, 0.40).mul(pow(nMag,  float(4.0))).mul(band).mul(0.35));
+
+  // Dust lanes: dark filaments cutting through the band
+  const dust = pow(fbm(dir.mul(7.0).add(vec3(80.0, 80.0, 80.0)), 5).mul(0.5).add(0.5), float(3.0)).mul(band);
+  col.mulAssign(float(1.0).sub(dust.mul(0.65)));
+
+  // Stars: hashed grid cells with round falloff + warm/cool tint variation
+  const cell = dir.mul(140.0);
+  const id = floor(cell);
+  const presence = smoothstep(float(0.988), float(1.0), hash3(id));
+  const d = length(fract(cell).sub(0.5));
+  const glow = pow(smoothstep(float(0.34), float(0.0), d), float(2.0));
+  const tint = mix(vec3(0.70, 0.80, 1.00), vec3(1.00, 0.88, 0.66), hash3(id.add(vec3(7.3, 1.1, 3.9))));
+  col.addAssign(tint.mul(presence).mul(glow).mul(2.2));
+
+  // Sun: hot disc + corona, baked into the sky so the env map lights with it
+  const sd = dot(dir, uSunDir);
+  const disc = smoothstep(float(0.99955), float(0.99985), sd).mul(30.0);
+  const corona = pow(max(sd, 0.0), float(64.0)).mul(0.55)
+           .add(pow(max(sd, 0.0), float(8.0)).mul(0.06));
+  col.addAssign(vec3(1.0, 0.85, 0.6).mul(disc.add(corona)));
+
+  return vec4(col, 1.0);
+});
+
+// One material, two domes: visible sky + bake-only sky.
+const skyMat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false });
+skyMat.colorNode = skyColorNode();
+
+const skyGeo = new THREE.SphereGeometry(900, 64, 32);
+
+const scene = new THREE.Scene();
+scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+const skyScene = new THREE.Scene(); // isolated scene for the cube bake
+skyScene.add(new THREE.Mesh(skyGeo, skyMat));
+
+/* --- PMREM environment from the sky ---------------------------------
+   CubeCamera renders skyScene into a cube target; pmremTexture()
+   prefilters it for rough reflections. If pmremTexture misbehaves on
+   a given three version/backend, the raw cube texture fallback keeps
+   the bench alive (reflections will just be sharper than they should).
+--------------------------------------------------------------------- */
+const cubeRT = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType });
+const cubeCam = new THREE.CubeCamera(0.1, 2000, cubeRT);
+skyScene.add(cubeCam);
+
+let envApplied = false;
+function bakeEnvironment() {
+  cubeCam.update(renderer, skyScene);
+  if (!envApplied) {
+    try {
+      scene.environmentNode = pmremTexture(cubeRT.texture);
+    } catch (err) {
+      log('pmremTexture failed — raw cube env fallback.', err);
+      scene.environment = cubeRT.texture;
+    }
+    envApplied = true;
+  }
+}
+
+/* ============================================================
+   TEST SUBJECTS — three PBR spheres to judge the environment:
+   polished metal, rough rock, glossy dielectric ("water ball").
+   The disc-world replaces these in Step 3.
+   ============================================================ */
+const sphereGeo = new THREE.SphereGeometry(0.8, 64, 32);
+const subjects = [
+  new THREE.MeshStandardMaterial({ color: 0xd8d8d8, metalness: 1.0, roughness: 0.08 }),
+  new THREE.MeshStandardMaterial({ color: 0x6b5f4d, metalness: 0.0, roughness: 0.85 }),
+  new THREE.MeshStandardMaterial({ color: 0x0d2233, metalness: 0.0, roughness: 0.05 }),
+].map((mat, i) => {
+  const m = new THREE.Mesh(sphereGeo, mat);
+  m.position.set((i - 1) * 2.2, 0, 0);
+  scene.add(m);
+  return m;
+});
+
+/* ============================================================
+   LIGHTING — directional sun slaved to uSunDir + faint ambient.
+   Night handling is minimal here; Step 2 adds the moon.
+   ============================================================ */
+const sunLight = new THREE.DirectionalLight(0xfff0dd, 3.0);
+scene.add(sunLight);
+const ambient = new THREE.AmbientLight(0x223344, 0.15);
+scene.add(ambient);
+
+/* ============================================================
+   CAMERA + CONTROLS
+   ============================================================ */
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2000);
+camera.position.set(0, 1.2, 6);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 2;
+controls.maxDistance = 40;
+
+/* ============================================================
+   UI WIRING — sun azimuth/elevation, exposure, env re-bake throttle
+   ============================================================ */
+const els = {
+  az: document.getElementById('s-az'), vAz: document.getElementById('v-az'),
+  el: document.getElementById('s-el'), vEl: document.getElementById('v-el'),
+  ex: document.getElementById('s-ex'), vEx: document.getElementById('v-ex'),
+};
+
+let envDirty = true;
+let lastBake = 0;
+const BAKE_INTERVAL_MS = 250; // re-bake throttle while dragging the sun
+
+function applySun() {
+  const az = THREE.MathUtils.degToRad(parseFloat(els.az.value));
+  const el = THREE.MathUtils.degToRad(parseFloat(els.el.value));
+  els.vAz.textContent = els.az.value + '°';
+  els.vEl.textContent = els.el.value + '°';
+
+  const d = new THREE.Vector3(
+    Math.cos(el) * Math.sin(az),
+    Math.sin(el),
+    Math.cos(el) * Math.cos(az)
+  );
+  uSunDir.value.copy(d);
+  sunLight.position.copy(d).multiplyScalar(100);
+
+  // Fade the directional light out as the sun sinks below the horizon
+  const horizon = THREE.MathUtils.smoothstep(Math.sin(el), -0.08, 0.12);
+  sunLight.intensity = 3.0 * horizon;
+  ambient.intensity = 0.15 + 0.1 * (1 - horizon); // slightly bluer-brighter ambience at night
+
+  envDirty = true;
+}
+
+function applyExposure() {
+  renderer.toneMappingExposure = parseFloat(els.ex.value);
+  els.vEx.textContent = parseFloat(els.ex.value).toFixed(2);
+}
+
+els.az.addEventListener('input', applySun);
+els.el.addEventListener('input', applySun);
+els.ex.addEventListener('input', applyExposure);
+applySun();
+applyExposure();
+
+/* ============================================================
+   PERF HUD
+   ============================================================ */
+const perfEl = document.getElementById('perf');
+let frames = 0, perfLast = performance.now(), msAccum = 0;
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let prev = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const frameMs = now - prev;
+  prev = now;
+
+  // Throttled environment re-bake (sun moved)
+  if (envDirty && now - lastBake > BAKE_INTERVAL_MS) {
+    bakeEnvironment();
+    lastBake = now;
+    envDirty = false;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+
+  // Perf HUD @2Hz
+  frames++;
+  msAccum += frameMs;
+  if (now - perfLast > 500) {
+    const fps = Math.round(frames * 1000 / (now - perfLast));
+    const ms = (msAccum / frames).toFixed(1);
+    perfEl.textContent = `${fps} fps · ${ms} ms`;
+    frames = 0; msAccum = 0; perfLast = now;
+  }
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
