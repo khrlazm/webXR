@@ -43,6 +43,17 @@
     font-size: 15px; font-weight: normal; letter-spacing: 0.30em;
     color: var(--gold); text-transform: uppercase;
   }
+  #panel-toggle {
+    position: absolute; top: 12px; right: 12px;
+    width: 22px; height: 22px; line-height: 1; padding: 0;
+    background: none; border: 1px solid rgba(201, 161, 90, 0.35);
+    color: var(--gold); font-family: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  #panel-toggle:hover { border-color: var(--gold); }
+  #panel.collapsed { width: auto; padding: 10px 46px 10px 16px; }
+  #panel.collapsed .sub, #panel.collapsed .row,
+  #panel.collapsed .check, #panel.collapsed .hint { display: none; }
   #panel .sub {
     font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
     color: rgba(232, 226, 213, 0.45); margin: 3px 0 12px;
@@ -109,7 +120,8 @@
 
 <div id="panel">
   <h1>Kayangan</h1>
-  <div class="sub">Visual Bench · Step 0–3</div>
+  <button id="panel-toggle" title="Minimize panel">–</button>
+  <div class="sub">Visual Bench · Step 0–4</div>
   <div class="row">
     <label>Quality <span id="v-q"></span></label>
     <select id="s-q">
@@ -130,6 +142,29 @@
   <div class="row">
     <label>Sea level <span id="v-sea">0.00</span></label>
     <input id="s-sea" type="range" min="-0.22" max="0.22" step="0.005" value="0">
+  </div>
+  <div class="sub" style="margin:10px 0 8px">Step 4 · Water</div>
+  <label class="check"><input id="c-depthfx" type="checkbox" checked> Depth FX (foam + absorption)</label>
+  <label class="check"><input id="c-refr" type="checkbox"> Refraction</label>
+  <div class="row">
+    <label>Absorption <span id="v-abs">2.8</span></label>
+    <input id="s-abs" type="range" min="0.5" max="8" step="0.1" value="2.8">
+  </div>
+  <div class="row">
+    <label>Foam width <span id="v-foam">0.040</span></label>
+    <input id="s-foam" type="range" min="0.005" max="0.12" step="0.005" value="0.04">
+  </div>
+  <div class="row">
+    <label>Wave amp <span id="v-wamp">0.42</span></label>
+    <input id="s-wamp" type="range" min="0" max="1" step="0.02" value="0.42">
+  </div>
+  <div class="row">
+    <label>Wave scale <span id="v-wsc">9.0</span></label>
+    <input id="s-wsc" type="range" min="3" max="20" step="0.5" value="9">
+  </div>
+  <div class="row">
+    <label>Refr. strength <span id="v-refr">0.045</span></label>
+    <input id="s-refr" type="range" min="0" max="0.1" step="0.005" value="0.045">
   </div>
   <div class="row">
     <label>Moisture <span id="v-wet">0.00</span></label>
@@ -157,10 +192,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
-  Fn, float, vec3, vec4, uniform,
+  Fn, float, vec2, vec3, vec4, uniform,
   positionLocal, normalLocal, normalize, dot, pow, max, exp, abs,
   mix, smoothstep, fract, sin, floor, length,
-  mx_noise_float, pmremTexture, cubeTexture
+  mx_noise_float, pmremTexture, cubeTexture,
+  // Step 4 — water
+  time, transformNormalToView, screenUV, linearDepth,
+  viewportLinearDepth, viewportDepthTexture, viewportSharedTexture,
+  cameraNear, cameraFar
 } from 'three/tsl';
 
 /* ============================================================
@@ -505,19 +544,132 @@ const world = new THREE.Mesh(buildWorldGeometry(SEED), terrainMat);
 scene.add(world);
 
 /* ============================================================
-   STEP 3c — SEA PLACEHOLDER
-   Deliberately dumb: a glossy StandardMaterial disc. Under the
-   PMREM nebula it previews Step 4's reflective ceiling for
-   free. The real TSL water (absorption, foam, refraction)
-   replaces this in Step 4.
+   STEP 4 — WATER (the headline shot)
+   Backdrop pattern from the official webgpu_backdrop_water
+   example: viewportLinearDepth drives shoreline foam +
+   depth absorption; viewportSharedTexture drives refraction.
+   Both are backend-agnostic TSL nodes, but each costs a
+   framebuffer copy per frame on WebGL2 — so they are
+   independently severable via the "Depth FX" (depth copy)
+   and "Refraction" (color copy) checkboxes: a three-way A/B
+   for the device tests. The env bakes from its own skyScene,
+   so the water never pollutes its own reflections.
+   Future WaterMaterial module.
    ============================================================ */
-const seaMat = new THREE.MeshStandardMaterial({
-  color: 0x08304a, metalness: 0.0, roughness: 0.12,
-  transparent: true, opacity: 0.88,
-});
-const sea = new THREE.Mesh(new THREE.CircleGeometry(RADIUS * 0.998, 160), seaMat);
-sea.rotation.x = -Math.PI / 2;
+const uAbsorb    = uniform(2.8);    // absorption strength, 1/world-unit
+const uFoamWidth = uniform(0.04);   // water depth that reads as shoreline
+const uWaveAmp   = uniform(0.42);   // normal perturbation strength
+const uWaveScale = uniform(9.0);    // ripple spatial frequency
+const uRefr      = uniform(0.045);  // refraction UV distortion
+
+const waterOpts = {
+  depthFX:    true,
+  refraction: tierName !== 'low',        // color copy off on mobile/Quest by default
+  octaves:    tierName === 'high' ? 3 : 2,
+  bands:      tierName !== 'low',        // retreating foam lines
+  whitecaps:  tierName === 'high',
+};
+
+function buildWaterMaterial() {
+  const mat = new THREE.MeshStandardNodeMaterial();
+  mat.transparent = true;
+  mat.metalnessNode = float(0.0);
+
+  // ---- wave height field (procedural, no textures) ----
+  const waveH = Fn(([p]) => {
+    const t = time.mul(0.11);
+    const q = vec3(p.x, t, p.y);
+    const n = mx_noise_float(q).mul(0.62).toVar();
+    n.addAssign(mx_noise_float(q.mul(2.63).add(vec3(19.7, 3.1, 7.7))).mul(0.28));
+    if (waterOpts.octaves >= 3) {
+      n.addAssign(mx_noise_float(q.mul(6.1).add(vec3(4.2, 41.0, 13.9))).mul(0.13));
+    }
+    return n;
+  });
+
+  const p  = positionLocal.xz.mul(uWaveScale);
+  const e  = float(0.07);
+  const h  = waveH(p);
+  const slopeX = h.sub(waveH(p.add(vec2(e, 0)))).mul(uWaveAmp);
+  const slopeZ = h.sub(waveH(p.add(vec2(0, e)))).mul(uWaveAmp);
+  mat.normalNode = transformNormalToView(normalize(vec3(slopeX, 1.0, slopeZ)));
+
+  // ---- shared color anchors ----
+  const deepCol  = vec3(0.014, 0.095, 0.155); // ink-blue scatter floor
+  const foamCol  = vec3(0.93, 0.96, 0.97);
+  const surfTint = vec3(0.018, 0.045, 0.060); // near-black albedo -> env reflection dominates
+  const kRGB     = vec3(3.2, 1.15, 0.85);     // per-channel absorption (red dies first)
+
+  if (waterOpts.depthFX) {
+    // ---- water depth in ~world units ----
+    const fragD  = linearDepth();                     // this fragment, 0..1 near->far
+    const range  = cameraFar.sub(cameraNear);
+    const depthW = viewportLinearDepth.sub(fragD).mul(range).max(0.0);
+
+    // ---- foam ----
+    const shore  = depthW.div(uFoamWidth).clamp();    // 0 at shoreline -> 1 deep
+    const foamN  = mx_noise_float(
+      vec3(positionLocal.x.mul(16.0), time.mul(0.45), positionLocal.z.mul(16.0))
+    ).mul(0.5).add(0.5);
+    // NOTE: no .toVar()/.assign() at material top-level — those need an
+    // Fn() stack (Rule #4). Plain JS reassignment builds the same graph.
+    let foam = shore.oneMinus().mul(1.35).sub(foamN.mul(0.55)).clamp();
+    if (waterOpts.bands) {
+      // retreating foam lines marching toward shore
+      const band = shore.mul(6.0).sub(time.mul(0.7)).sin().mul(0.5).add(0.5);
+      foam = foam.add(smoothstep(float(0.86), float(0.98), band).mul(shore.oneMinus()).mul(0.6)).clamp();
+    }
+    if (waterOpts.whitecaps) {
+      foam = foam.add(smoothstep(float(0.55), float(0.85), h).mul(0.30)).clamp();
+    }
+
+    mat.colorNode     = mix(surfTint, foamCol, foam);
+    mat.roughnessNode = mix(float(0.09), float(0.85), foam);
+
+    if (waterOpts.refraction) {
+      // ---- refracted see-through body (backdrop pattern) ----
+      const refrUV   = screenUV.add(vec2(slopeX, slopeZ).mul(uRefr));
+      const dRefr    = linearDepth(viewportDepthTexture(refrUV));
+      const usable   = dRefr.sub(fragD).greaterThan(0.0); // refracted sample is behind water
+      const finalUV  = usable.select(refrUV, screenUV);
+      const sceneLin = usable.select(dRefr, viewportLinearDepth);
+      const dSeen    = sceneLin.sub(fragD).mul(range).max(0.0);
+
+      const sceneCol = viewportSharedTexture(finalUV).rgb;
+      const body = sceneCol
+        .mul(exp(kRGB.mul(dSeen).mul(uAbsorb).negate()))                          // absorption
+        .add(deepCol.mul(exp(dSeen.mul(uAbsorb).mul(0.9).negate()).oneMinus()));  // scatter-in
+
+      mat.backdropNode      = body;
+      mat.backdropAlphaNode = foam.oneMinus(); // foam is opaque over the see-through
+    } else {
+      // ---- depth FX without the color copy (low-tier default) ----
+      const dFac = exp(depthW.mul(uAbsorb).mul(0.9).negate()).oneMinus();
+      const body = mix(vec3(0.10, 0.34, 0.38), deepCol, dFac); // shallow lagoon -> ink
+      mat.colorNode   = mix(body, foamCol, foam);
+      mat.opacityNode = mix(mix(float(0.30), float(0.95), dFac), float(1.0), foam);
+    }
+  } else {
+    // ---- kill-switch fallback: = the Step-3c placeholder look ----
+    mat.colorNode     = surfTint;
+    mat.roughnessNode = float(0.11);
+    mat.opacityNode   = float(0.88);
+  }
+
+  return mat;
+}
+
+const waterGeo = new THREE.CircleGeometry(RADIUS * 0.998, 160);
+waterGeo.rotateX(-Math.PI / 2); // baked in: positionLocal stays true XZ (rotation-proof)
+const sea = new THREE.Mesh(waterGeo, buildWaterMaterial());
+sea.renderOrder = 10; // after opaque terrain within the transparent pass
 scene.add(sea);
+
+function rebuildWater() {
+  const old = sea.material;
+  sea.material = buildWaterMaterial();
+  old.dispose();
+}
 
 /* ============================================================
    STEP 2 — MOON + DAY CYCLE
@@ -565,6 +717,13 @@ const els = {
   ex:  document.getElementById('s-ex'),  vEx:  document.getElementById('v-ex'),
   cycle: document.getElementById('c-cycle'),
   rAz: document.getElementById('r-az'), rEl: document.getElementById('r-el'),
+  // Step 4 — water
+  abs:  document.getElementById('s-abs'),  vAbs:  document.getElementById('v-abs'),
+  foam: document.getElementById('s-foam'), vFoam: document.getElementById('v-foam'),
+  wamp: document.getElementById('s-wamp'), vWamp: document.getElementById('v-wamp'),
+  wsc:  document.getElementById('s-wsc'),  vWsc:  document.getElementById('v-wsc'),
+  refr: document.getElementById('s-refr'), vRefr: document.getElementById('v-refr'),
+  cRefr: document.getElementById('c-refr'), cDepth: document.getElementById('c-depthfx'),
 };
 
 els.q.value = tierName;
@@ -625,6 +784,42 @@ els.el.addEventListener('input', applySunFromSliders);
 els.sea.addEventListener('input', applySea);
 els.wet.addEventListener('input', applyMoisture);
 els.ex.addEventListener('input', applyExposure);
+
+// ---- Step 4: water sliders drive uniforms live (no rebuild) ----
+function bindWaterSlider(input, label, uni, digits) {
+  const apply = () => {
+    uni.value = parseFloat(input.value);
+    label.textContent = parseFloat(input.value).toFixed(digits);
+  };
+  input.addEventListener('input', apply);
+  apply();
+}
+bindWaterSlider(els.abs,  els.vAbs,  uAbsorb,    1);
+bindWaterSlider(els.foam, els.vFoam, uFoamWidth, 3);
+bindWaterSlider(els.wamp, els.vWamp, uWaveAmp,   2);
+bindWaterSlider(els.wsc,  els.vWsc,  uWaveScale, 1);
+bindWaterSlider(els.refr, els.vRefr, uRefr,      3);
+
+// ---- Step 4: checkboxes change the shader graph -> material rebuild ----
+els.cRefr.checked  = waterOpts.refraction;
+els.cDepth.checked = waterOpts.depthFX;
+els.cRefr.addEventListener('change', () => {
+  waterOpts.refraction = els.cRefr.checked;
+  rebuildWater();
+});
+els.cDepth.addEventListener('change', () => {
+  waterOpts.depthFX = els.cDepth.checked;
+  rebuildWater();
+});
+
+// ---- Panel minimize ----
+const panel = document.getElementById('panel');
+const panelToggle = document.getElementById('panel-toggle');
+panelToggle.addEventListener('click', () => {
+  const collapsed = panel.classList.toggle('collapsed');
+  panelToggle.textContent = collapsed ? '+' : '–';
+  panelToggle.title = collapsed ? 'Expand panel' : 'Minimize panel';
+});
 
 // Day cycle: one full day = 90s. Continuous env re-bakes at the
 // tier's throttle — this is the honest test of an in-game moving sun.
