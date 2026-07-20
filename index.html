@@ -22,29 +22,12 @@
     overflow-x:hidden;
   }
 
-  /* starfield — three drifting layers of CSS stars */
-  .stars, .stars::before, .stars::after{
-    content:"";
-    position:fixed;inset:-50%;
-    background-image:
-      radial-gradient(1px 1px at 12% 24%, #bfc8dd 50%, transparent 51%),
-      radial-gradient(1px 1px at 68% 12%, #9aa4b8 50%, transparent 51%),
-      radial-gradient(1.5px 1.5px at 33% 71%, #dfe6f2 50%, transparent 51%),
-      radial-gradient(1px 1px at 84% 57%, #bfc8dd 50%, transparent 51%),
-      radial-gradient(1px 1px at 47% 39%, #8a93a8 50%, transparent 51%),
-      radial-gradient(1.5px 1.5px at 91% 86%, #dfe6f2 50%, transparent 51%),
-      radial-gradient(1px 1px at 21% 88%, #9aa4b8 50%, transparent 51%),
-      radial-gradient(1px 1px at 59% 94%, #bfc8dd 50%, transparent 51%);
-    background-size:640px 640px;
-    animation:drift 240s linear infinite;
+  /* starfield — flying through space */
+  #space{
+    position:fixed;inset:0;
+    width:100%;height:100%;
     pointer-events:none;
-    opacity:.8;
-  }
-  .stars::before{ background-size:920px 920px; animation-duration:360s; opacity:.5 }
-  .stars::after{ background-size:440px 440px; animation-duration:180s; opacity:.35 }
-  @keyframes drift{ to{ transform:translate3d(220px,120px,0) } }
-  @media (prefers-reduced-motion: reduce){
-    .stars,.stars::before,.stars::after{ animation:none }
+    opacity:.9;
   }
 
   main{
@@ -112,7 +95,7 @@
 </style>
 </head>
 <body>
-<div class="stars" aria-hidden="true"></div>
+<canvas id="space" aria-hidden="true"></canvas>
 <main>
   <header>
     <h1>SKETCHES</h1>
@@ -137,5 +120,89 @@
   </ul>
   <footer>✦</footer>
 </main>
+
+<script>
+/* Flying through space — perspective starfield with gentle motion trails */
+(function(){
+  const canvas = document.getElementById('space');
+  const ctx = canvas.getContext('2d');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let W, H, CX, CY;
+  function resize(){
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    canvas.width = W*dpr; canvas.height = H*dpr;
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    CX = W/2; CY = H/2;
+  }
+  resize();
+  addEventListener('resize', resize);
+
+  const N = 320;
+  const SPEED = 0.16;                 // gentle cruise, not a hyperjump
+  const tints = ['#dfe6f2','#bfc8dd','#9aa4b8','#d8c9a0'];  // a few gold-warm stars
+  const stars = [];
+  function spawn(s, anywhere){
+    s.x = (Math.random()*2-1);        // -1..1 view space
+    s.y = (Math.random()*2-1);
+    s.z = anywhere ? Math.random()*0.95+0.05 : 1;
+    s.tint = tints[(Math.random()*tints.length)|0];
+    return s;
+  }
+  for(let i=0;i<N;i++) stars.push(spawn({}, true));
+
+  function project(s){
+    const k = 0.9/s.z;                // perspective divide
+    return [CX + s.x*k*CX, CY + s.y*k*CY, k];
+  }
+
+  function drawStatic(){
+    ctx.clearRect(0,0,W,H);
+    for(const s of stars){
+      const [sx,sy] = project(s);
+      if(sx<0||sx>W||sy<0||sy>H) continue;
+      ctx.fillStyle = s.tint;
+      ctx.globalAlpha = Math.min(1, 0.25 + (1-s.z)*0.75);
+      ctx.beginPath();
+      ctx.arc(sx, sy, Math.min(2.2, 0.4 + (1-s.z)*1.6), 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  if(reduced){ drawStatic(); return; }   // respect reduced motion: calm, still sky
+
+  let last = performance.now();
+  function frame(now){
+    requestAnimationFrame(frame);
+    const dt = Math.min(0.05,(now-last)/1000); last = now;
+
+    // fade previous frame slightly instead of clearing → soft streak trails
+    ctx.fillStyle = 'rgba(5,6,8,0.38)';
+    ctx.fillRect(0,0,W,H);
+
+    for(const s of stars){
+      const [px,py] = project(s);
+      s.z -= SPEED*dt;
+      if(s.z <= 0.03){ spawn(s,false); continue; }
+      const [sx,sy] = project(s);
+      if(sx<-20||sx>W+20||sy<-20||sy>H+20){ spawn(s,false); continue; }
+
+      const near = 1 - s.z;
+      ctx.strokeStyle = s.tint;
+      ctx.globalAlpha = Math.min(1, 0.2 + near*0.8);
+      ctx.lineWidth = Math.min(2.4, 0.5 + near*1.8);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(px, py);              // streak from last position → this one
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
 </body>
 </html>
