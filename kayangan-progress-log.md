@@ -141,15 +141,68 @@ Side-by-side screenshot vs. concept art. Written verdict: visual ceiling, what f
 
 **Grading state for judging:** sea 0.00, moisture ~0.3, exposure ~1.0, orbit to the sunlit side. Post-fix sky confirmed: deep black space, stars, gold nebula (screenshot-verified); winding fix applied but **not yet screenshot-verified — first thing next session**.
 
-## 10. Next session
+## 10. Bench Step 4: WATER — BUILT, DEVICE-TESTED, DONE (July 21, 2026)
 
-1. **Verify**: reload bench → disc right-side-out, biomes lit, nebula reflecting in sea at grazing angle. If sea is flat navy, `pmremTexture` silently failed (console will show the fallback warning) → debug PMREM path.
-2. Re-test A06 + Quest 2 with disc in frame + "time flows" on (continuous-bake stress).
-3. **Step 4 — real TSL water** (replaces placeholder): (i) depth-absorption + shoreline foam first (needs depth texture — ⚠ backend parity risk + linear/display rule applies), (ii) PMREM nebula reflection, (iii) refraction via scene-color, (iv) SSR stretch-only.
-4. Then Step 5 (rim waterfalls as TSL compute — WebGPU only, CPU fallback) and Step 6 (bloom, god rays, rim glow, Quest preset).
+**Step 4 — real TSL water** replaces the Step-3c placeholder. Mesh still named `sea`; `applySea()` untouched, so the sea slider still moves plane + terrain biome bands together. Construction ported from the official `webgpu_backdrop_water` example (the one arrangement known to compile on both backends), deviating only in the shading math, not the plumbing.
 
-Bench file: `kayangan-bench.html` (v3, ~680 lines). Log + bench both in outputs / user's GitHub.
+**What it does:**
+- **Wave normals** — procedural, no textures. 2–3 octaves of `mx_noise_float` scrolled on a time axis, central-difference slope → `transformNormalToView`. Octave count tiered (high 3 / med 2 / low 1, see §12).
+- **Shoreline foam** — water depth in ~world units via `viewportLinearDepth.sub(linearDepth()).mul(cameraFar.sub(cameraNear))`, so `uFoamWidth` reads in disc units and survives a far-plane change. Base foam + (high/med) retreating foam bands marching to shore + (high) whitecaps on wave crests.
+- **Depth absorption** — per-channel `kRGB` (red dies first) via `exp(-k·depth·absorb)`, plus an ink-blue scatter-in floor.
+- **Refraction** — backdrop pattern: `viewportSharedTexture(screenUV + slope·uRefr)` as `backdropNode`, guarded by a depth test so foreground geometry doesn't smear into the water body. `backdropAlphaNode = foam.oneMinus()` (foam is opaque over the see-through).
 
+**Tiering / severability** — the two framebuffer copies are independently switchable, giving a three-way live A/B: **Depth FX** checkbox = the depth copy (foam+absorption); **Refraction** checkbox = the color copy. Low tier boots refraction-off. Untick Depth FX too → placeholder-equivalent glossy disc (nothing lost). Grading sliders (absorption, foam width, wave amp, wave scale, refr strength) drive uniforms live; the checkboxes change the graph → material rebuild (old disposed).
+
+**Free architectural win:** env bakes from the dedicated `skyScene`, never the main scene → water cannot reflect itself through its own env map. The feedback-mud risk from the plan's checklist is structurally impossible here; no layer juggling needed.
+
+**Device results — MAXIMAL config (time flows + refraction + depth FX all ON; above what low preset ships):**
+- **Quest 2** browser WebGPU: **60–72fps** zoomed out · **36–48fps** zoomed in.
+- **Samsung A06** WebGPU: **70–90fps** zoomed out · **39–51fps** zoomed in.
+
+Both hold panel cap zoomed out with everything burning + continuous bake. Zoom-in dip is **fill-rate** (water covers most of the screen; up to ~9 noise evals/fragment for wave normals + copies), not the viewport copies (those are constant-cost/frame). Decision it was gating — *does Quest keep shoreline foam?* — **yes, comfortably.** → Step 4 closed on these numbers.
+
+### Rule learned this session
+4. **`.toVar()` / `.assign()` / `.addAssign()` only inside an `Fn()` scope.** At material top-level, compose nodes with plain JS reassignment (`let foam = …; foam = foam.add(…)`). Symptom of breaking it: `THREE.TSL: No stack defined for assign operation` — **non-fatal**, the offending layers silently drop (here: foam bands + whitecaps rendered nothing until fixed, base foam still showed → easy to miss). Will recur in Step 5 compute and Phase 2 erosion.
+
+### Caveats carried (not blockers)
+- **Double-tonemap check — CONFIRMED REAL, then FIXED (§12).** Night-camera A/B (refraction off vs on, same view) showed the refracted sea body glowing milky-bright — brighter than the night sky, which water can't be. Root cause + fix in §12.
+- **XR viewport textures** under a multiview session are untested — fine for the flat-screen bench, revisit before Phase-1 XR.
+- **SSR** deliberately not built — absorption + foam + nebula reflection is the shot. Only if it comes free.
+
+## 11. Step 4.1 — WATER PERF PASS (OPEN)
+
+Split out so Step 4 could close on **verified** numbers rather than re-gathering all four after a change. Goal: recover the zoom-in dip on the two devices.
+
+- **Low-tier wave octaves 2 → 1** (3 noise evals for the normal instead of 6). *Committed in bench, NOT yet device-tested* — invalidates the §11 low-tier numbers if/when low is measured; §11's numbers are the *maximal* config and stand regardless.
+- **Candidate: resolution governor** — drop `renderer.setPixelRatio` a notch when a frame-time budget is blown (coverage-driven, so it targets exactly the zoom-in case). Not built.
+- **Candidate: fill cap** — clamp effective water pixel work when the disc fills the frame. Not built.
+
+Close 4.1 when: low tier re-measured post-octave-cut on A06 + Quest 2, and a verdict on whether the governor is worth the complexity (may already be fine at 39–51fps — a playable floor, so this could close as "no further action").
+
+## 12. Step 4.2 — REFRACTION TONE-MAP FIX (July 21, 2026) — DONE
+
+Confirmed on-device: refraction ON made the sea body wash out, clearest at night where the refracted water glowed brighter than the sky behind it. Textbook pipeline rule #2 breach.
+
+**Root cause:** rendering direct-to-canvas, opaque fragments write **AgX-graded** color to the framebuffer. `viewportSharedTexture` samples that graded buffer as the refraction backdrop, runs absorption on it, and the water's own output gets AgX **again** → double tone-map. (Absorption was also being computed on non-linear color — physically wrong, secondary to the brightness blow-out.)
+
+**Fix:** a `THREE.PostProcessing` pass (r180; renamed `RenderPipeline` in r183) — `postFX.outputNode = pass(scene, camera)`. The scene pass renders to a **linear** render target; tone mapping is applied exactly once at the output transform (`outputColorTransform` default true, so AgX + `toneMappingExposure` are still honored — exposure slider unchanged). `viewportSharedTexture` now samples linear color → single AgX, and absorption math is honest.
+
+**Routed in only when refraction is live** — `usesRefraction() = depthFX && refraction`. The double-tonemap only exists when the color copy is sampled, so depth-FX-only and **low tier keep the cheaper direct `renderer.render()` path** and pay nothing for a fix they don't use (survives-the-low-tier rule). Opaque terrain/sky render identically on both paths (same AgX, same exposure), so toggling refraction causes no grade shift — only the water body corrects.
+
+**Env bake untouched:** `bakeEnvironment()` still renders `skyScene` directly via `cubeCam.update(renderer, …)` with NoToneMapping around it — independent of postFX, separate targets, still correct.
+
+**Watch item (not a blocker):** the renderer's built-in MSAA may not carry through the scene `pass()` on the high-tier refraction path → possible edge aliasing when refraction is on. Bench-acceptable; if visible, set sample count on the pass. Only affects refraction-on high tier.
+
+## 13. Next session
+
+1. **Verify the refraction fix (§12)**: reload high tier, night camera, toggle Refraction — the sea body must now stay dark/plausible instead of glowing washed-out. Confirm no grade shift in terrain/sky between the two paths, exposure slider still works on the refraction path, and check for edge aliasing (MSAA-through-pass watch item).
+2. **Step 4.1 measure**: reload low tier on A06 + Quest 2 after the octave cut; record zoomed-in fps. Decide governor: build or "no action." (Low tier stays on the direct render path — the §12 fix doesn't touch it.)
+3. **Step 5 — rim waterfalls as TSL compute particles** (WebGPU only; CPU fallback = sketch's approach). Watch Rule #4 — compute is all `Fn()`-scoped assigns. Strategic validation for Phase 2 erosion.
+4. Then Step 6 (bloom, god rays, rim glow, **Quest preset toggle** — note: bloom/god-rays will also route through the postFX pass now that it exists) and Step 7 (exit test vs concept art — bench done when the verdict is written).
+
+**Risk register update:** #1 (depth-texture backend parity → water) **RETIRED** — compiled + ran on WebGPU across desktop + Quest 2 + A06. #2 (TSL compute absent on WebGL2 → waterfalls) still live, mitigated by CPU fallback, tested next.
+
+Bench file: `kayangan-bench.html` (v4.2, ~910 lines) — Step 4 water + refraction tone-map fix + panel minimize toggle. Log + bench both in outputs / user's GitHub.
 ---
 
 User's stated interests: procedural generation, environmental storytelling, symbolic world-building. Target hardware: Quest-class. Development so far is desktop-first single-file sketches in a folder served statically alongside index.html. User location context: Malaysia (hence *Kayangan*).

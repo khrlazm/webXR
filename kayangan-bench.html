@@ -199,7 +199,9 @@ import {
   // Step 4 — water
   time, transformNormalToView, screenUV, linearDepth,
   viewportLinearDepth, viewportDepthTexture, viewportSharedTexture,
-  cameraNear, cameraFar
+  cameraNear, cameraFar,
+  // Step 4.2 — linear scene pass for refraction (fixes double tone-map)
+  pass
 } from 'three/tsl';
 
 /* ============================================================
@@ -565,7 +567,7 @@ const uRefr      = uniform(0.045);  // refraction UV distortion
 const waterOpts = {
   depthFX:    true,
   refraction: tierName !== 'low',        // color copy off on mobile/Quest by default
-  octaves:    tierName === 'high' ? 3 : 2,
+  octaves:    tierName === 'high' ? 3 : (tierName === 'medium' ? 2 : 1),
   bands:      tierName !== 'low',        // retreating foam lines
   whitecaps:  tierName === 'high',
 };
@@ -704,6 +706,27 @@ controls.dampingFactor = 0.08;
 controls.minDistance = 1.5;
 controls.maxDistance = 40;
 controls.target.set(0, 0, 0);
+
+/* ============================================================
+   STEP 4.2 — LINEAR SCENE PASS (refraction tone-map fix)
+   Direct-to-canvas rendering writes AgX-graded color to the
+   framebuffer, so viewportSharedTexture samples already-graded
+   pixels → the water re-applies AgX → refracted body glows
+   washed-out (visible as milky-bright sea at night). A
+   PostProcessing pass renders the scene to a LINEAR buffer and
+   applies tone mapping exactly once at the output transform,
+   so the refraction backdrop is sampled linear and absorption
+   math is physically honest too. Pipeline rule #2, resolved.
+
+   Routed in ONLY when refraction is live (see render loop):
+   depth-FX-only and low tier keep the cheaper direct path and
+   pay nothing for a pass they don't need. AgX + exposure are
+   still honored by the output transform, so the slider works
+   unchanged; opaque terrain/sky look identical on both paths.
+   ============================================================ */
+const postFX = new THREE.PostProcessing(renderer);
+postFX.outputNode = pass(scene, camera);
+const usesRefraction = () => waterOpts.depthFX && waterOpts.refraction;
 
 /* ============================================================
    UI WIRING
@@ -864,7 +887,11 @@ renderer.setAnimationLoop(() => {
   }
 
   controls.update();
-  renderer.render(scene, camera);
+  if (usesRefraction()) {
+    postFX.render();            // linear scene buffer → AgX applied once at output
+  } else {
+    renderer.render(scene, camera); // cheaper direct path (low tier / no refraction)
+  }
 
   frames++;
   msAccum += frameMs;
