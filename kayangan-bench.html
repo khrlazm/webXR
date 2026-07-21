@@ -493,9 +493,9 @@ const uMoisture = uniform(0.0);
 
 const BIOME = {
   abyss:  vec3(0.030, 0.075, 0.105),
-  sand:   vec3(0.760, 0.680, 0.490),
-  grass:  vec3(0.330, 0.470, 0.220),
-  forest: vec3(0.165, 0.340, 0.190),
+  sand:   vec3(0.640, 0.575, 0.410),  // muted, less brilliant than before
+  grass:  vec3(0.205, 0.355, 0.150),  // darker, greener (was a yellow-green)
+  forest: vec3(0.110, 0.255, 0.135),  // deep green
   rock:   vec3(0.420, 0.400, 0.370),
   cliff:  vec3(0.300, 0.280, 0.260),
   snow:   vec3(0.900, 0.925, 0.950),
@@ -509,11 +509,11 @@ const terrainColorNode = Fn(() => {
   const breakup = mx_noise_float(positionLocal.mul(6.0)).mul(0.5).add(0.5);
   const hh = h.sub(uSeaLevel).add(breakup.sub(0.5).mul(0.07)).toVar();
 
-  const col = mix(BIOME.abyss, BIOME.sand, smoothstep(float(-0.22), float(-0.01), hh)).toVar();
-  col.assign(mix(col, BIOME.grass,  smoothstep(float(0.012), float(0.05), hh)));
-  col.assign(mix(col, BIOME.forest, smoothstep(float(0.09),  float(0.17), hh).mul(breakup.mul(0.6).add(0.4))));
-  col.assign(mix(col, BIOME.rock,   smoothstep(float(0.21),  float(0.30), hh)));
-  col.assign(mix(col, BIOME.snow,   smoothstep(float(0.30),  float(0.38), hh)));
+  const col = mix(BIOME.abyss, BIOME.sand, smoothstep(float(-0.16), float(-0.02), hh)).toVar();
+  col.assign(mix(col, BIOME.grass,  smoothstep(float(-0.005), float(0.020), hh))); // grass from the waterline -> thin beach
+  col.assign(mix(col, BIOME.forest, smoothstep(float(0.05),  float(0.14), hh).mul(breakup.mul(0.6).add(0.4))));
+  col.assign(mix(col, BIOME.rock,   smoothstep(float(0.23),  float(0.31), hh)));
+  col.assign(mix(col, BIOME.snow,   smoothstep(float(0.31),  float(0.38), hh)));
 
   // Steep faces read as cliff rock regardless of band (also covers the skirt)
   col.assign(mix(col, BIOME.cliff, smoothstep(float(0.35), float(0.65), slope)));
@@ -540,7 +540,7 @@ const terrainRoughnessNode = Fn(() => {
   const breakup = mx_noise_float(positionLocal.mul(6.0)).mul(0.5).add(0.5);
   const hh = h.sub(uSeaLevel).add(breakup.sub(0.5).mul(0.07));
   const snowMask = smoothstep(float(0.30), float(0.38), hh);
-  const sandMask = smoothstep(float(-0.22), float(-0.01), hh).mul(smoothstep(float(0.05), float(0.012), hh));
+  const sandMask = smoothstep(float(-0.16), float(-0.02), hh).mul(smoothstep(float(0.020), float(-0.005), hh));
   const r = float(0.93).toVar();
   r.assign(mix(r, float(0.55), snowMask)); // snow slightly glossy under the nebula
   r.assign(mix(r, float(0.78), sandMask));
@@ -691,10 +691,14 @@ function rebuildWater() {
      velocity/life updated in a compute pass; billboarded
      additive streaks). This is the strategic validation for
      Phase 2's GPU erosion/shallow-water sim.
-   • WebGL2  — CPU-stepped THREE.Points (the sketch's proven
-     approach). TSL compute has no WebGL2 path, and point uv()
-     only works on WebGL — so the fallback is a DIFFERENT, also-
-     correct rendering primitive, not a broken port.
+   • WebGL2  — CPU-stepped instanced billboarded quads (same
+     PlaneGeometry + billboarding + additive material as the
+     GPU path, via one buildStreakMaterial()). TSL compute has
+     no WebGL2 path, so JS integrates the particles and writes
+     per-instance position/alpha/brightness into InstancedBuffer-
+     Attributes. (Was THREE.Points, but the node point-sprite/
+     size path is unreliable on the WebGL2 backend -> nothing
+     drew; instanced quads render identically on both backends.)
 
    Emission is gated LIVE by the sea slider: rim height per
    segment (rimY) is static; `active = rimY < uSeaLevel` is a
@@ -725,6 +729,24 @@ const WF_COL   = new THREE.Color(0.60, 0.80, 0.99); // cool water-glow (additive
 // clusters that migrate around the rim -> "continuous flow", not a flat curtain.
 const uWfTime  = uniform(0);
 
+// Shared streak look for BOTH backends: a thin additive billboarded quad, placed
+// at posNode, tinted by brightNode (0 = invisible under additive) and faded by
+// alphaNode, soft-capped along its length. WebGPU feeds compute-buffer attributes;
+// WebGL2 feeds JS-updated InstancedBufferAttributes — same material either way, so
+// the falls look identical and the fragile point-sprite path is gone.
+function buildStreakMaterial(posNode, alphaNode, brightNode) {
+  const mat = new THREE.MeshBasicNodeMaterial();
+  mat.transparent = true;
+  mat.depthWrite  = false;
+  mat.blending    = THREE.AdditiveBlending;
+  mat.side        = THREE.DoubleSide;
+  const cap = uv().y.mul(PI).sin(); // 0 at both ends, 1 mid -> rounded streak
+  mat.colorNode   = vec3(WF_COL.r, WF_COL.g, WF_COL.b).mul(brightNode);
+  mat.opacityNode = cap.mul(alphaNode).mul(0.34);
+  mat.vertexNode  = billboarding({ position: posNode });
+  return mat;
+}
+
 function buildWaterfallGPU() {
   const N = WF_COUNT;
   const posBuf  = instancedArray(N, 'vec3');
@@ -734,7 +756,6 @@ function buildWaterfallGPU() {
   // Static rim-height table, indexed by emitter slot (= instance % SEGS).
   const rimHeights = uniformArray(Array.from(rimY), 'float');
   const uSegs = uint(SEGS);
-  const wcol  = vec3(WF_COL.r, WF_COL.g, WF_COL.b);
 
   // Emission field: drifting lobes around the ring. A rim segment only gushes
   // where this is high, and the lobes migrate with uWfTime -> the falls cluster
@@ -813,17 +834,8 @@ function buildWaterfallGPU() {
 
   renderer.computeAsync(computeInit);
 
-  const mat = new THREE.MeshBasicNodeMaterial();
-  mat.transparent = true;
-  mat.depthWrite  = false;
-  mat.blending    = THREE.AdditiveBlending;
-  mat.side        = THREE.DoubleSide;
   const life = lifeBuf.toAttribute();
-  const cap  = uv().y.mul(PI).sin();                  // soft rounded streak (0 at both ends)
-  mat.colorNode   = wcol.mul(life.w);                 // w = brightness; 0 -> black -> invisible under additive
-  mat.opacityNode = cap.mul(life.y).mul(0.34);
-  mat.vertexNode  = billboarding({ position: posBuf.toAttribute() });
-
+  const mat  = buildStreakMaterial(posBuf.toAttribute(), life.y, life.w);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.010, 0.20), mat); // thin + long -> reads as falling water
   mesh.count = N;
   mesh.frustumCulled = false;  // per-frame GPU-written positions -> stale bounds would cull
@@ -835,14 +847,26 @@ function buildWaterfallGPU() {
 
 function buildWaterfallCPU() {
   const N = WF_COUNT;
-  const pos    = new Float32Array(N * 3);
+  // Instanced billboarded quads (NOT THREE.Points): the node point-sprite/size
+  // path is unreliable on the WebGL2 backend, which is exactly where this runs.
+  // Same PlaneGeometry + billboarding as the GPU path; per-instance data comes
+  // from JS-updated InstancedBufferAttributes.
+  const geo     = new THREE.PlaneGeometry(0.010, 0.20);
+  const aPos    = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
+  const aAlpha  = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+  const aBright = new THREE.InstancedBufferAttribute(new Float32Array(N), 1);
+  aPos.setUsage(THREE.DynamicDrawUsage);
+  aAlpha.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('aPos', aPos);
+  geo.setAttribute('aAlpha', aAlpha);
+  geo.setAttribute('aBright', aBright);
+  const pos = aPos.array, alpha = aAlpha.array, bright = aBright.array;
+
   const vel    = new Float32Array(N * 3);
-  const alpha  = new Float32Array(N);
   const age    = new Float32Array(N);
   const slot   = new Int32Array(N);
-  const bright = new Float32Array(N);  // per-particle brightness (folded into alpha under additive)
-  const pFloor = new Float32Array(N);  // per-particle recycle depth -> scattered hem
-  const active = new Uint8Array(N);    // latched at spawn (rim submerged × field lobe)
+  const pFloor = new Float32Array(N);
+  const active = new Uint8Array(N);
   const sm = THREE.MathUtils.smoothstep;
 
   // Same drifting emission field as the GPU path (see wfField there).
@@ -865,9 +889,9 @@ function buildWaterfallCPU() {
     pos[i*3] = c*rr; pos[i*3+1] = sea + 0.01; pos[i*3+2] = s*rr;
     vel[i*3] = c*outv - s*tang; vel[i*3+1] = WF_VY0 * (0.7 + seed*0.6); vel[i*3+2] = s*outv + c*tang;
     pFloor[i] = WF_FLOOR + Math.random() * WF_HEM;
-    bright[i] = 0.55 + seed * 0.5;
     const depth = 1 - sm(rimY[slot[i]], sea - WF_DEPTH, sea);   // rim submersion 0..1
     active[i] = seed < depth * field(base, t) ? 1 : 0;
+    bright[i] = active[i] ? 0.55 + seed * 0.5 : 0;              // 0 -> invisible under additive
   };
 
   const sea0 = uSeaLevel.value;
@@ -882,29 +906,15 @@ function buildWaterfallCPU() {
     age[i] = t;
   }
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('aAlpha',   new THREE.BufferAttribute(alpha, 1));
-  // Manual generous bounds so the per-frame position rewrite can't trigger the
-  // stale-zero-bounding-sphere cull bug (project rule from the sketch).
-  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, -1, 0), 6);
-
-  const mat = new THREE.PointsNodeMaterial();
-  mat.transparent = true;
-  mat.depthWrite  = false;
-  mat.blending    = THREE.AdditiveBlending;
-  const soft = smoothstep(float(0.5), float(0.0), uv().distance(vec2(0.5, 0.5))); // round sprite (WebGL points)
-  mat.colorNode   = vec3(WF_COL.r, WF_COL.g, WF_COL.b);
-  mat.opacityNode = soft.mul(attribute('aAlpha')).mul(0.42);
-  mat.size = 2.6 * Math.min(window.devicePixelRatio, TIER.pixelRatio);
-
-  const points = new THREE.Points(geo, mat);
-  points.frustumCulled = false;
-  points.renderOrder = 11;
-  scene.add(points);
+  const mat  = buildStreakMaterial(attribute('aPos'), attribute('aAlpha'), attribute('aBright'));
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.count = N;               // draw N instances (same "Mesh + count" trick as the GPU path)
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 11;
+  scene.add(mesh);
 
   return {
-    object: points, mode: 'cpu',
+    object: mesh, mode: 'cpu',
     update(dt) {
       const sea = uSeaLevel.value;
       const t = uWfTime.value;
@@ -916,11 +926,12 @@ function buildWaterfallCPU() {
         pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
         const fadeIn   = sm(age[i], 0, 0.10);
         const disperse = 0.4 + 0.6 * sm(pos[i * 3 + 1], pFloor[i], pFloor[i] + 0.9);
-        alpha[i] = active[i] ? fadeIn * disperse * bright[i] : 0;
+        alpha[i] = active[i] ? fadeIn * disperse : 0;
         if (pos[i * 3 + 1] < pFloor[i] || age[i] > WF_LIFE_MAX) { spawn(i, sea, t); age[i] = 0; alpha[i] = 0; }
       }
-      geo.attributes.position.needsUpdate = true;
-      geo.attributes.aAlpha.needsUpdate = true;
+      aPos.needsUpdate = true;
+      aAlpha.needsUpdate = true;
+      aBright.needsUpdate = true;
     }
   };
 }
