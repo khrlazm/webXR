@@ -1,6 +1,6 @@
 # KAYANGAN — Progress Log
 *WebXR god-sim inspired by Populous. Handoff document for continuing in a new chat.*
-*Last updated: July 20, 2026*
+*Last updated: July 21, 2026*
 
 > **Rename:** Project formerly "GENESIS," now **Kayangan** (Malay: celestial abode / heaven). All prior references to GENESIS in files and sketches refer to this project.
 
@@ -169,7 +169,7 @@ Both hold panel cap zoomed out with everything burning + continuous bake. Zoom-i
 - **XR viewport textures** under a multiview session are untested — fine for the flat-screen bench, revisit before Phase-1 XR.
 - **SSR** deliberately not built — absorption + foam + nebula reflection is the shot. Only if it comes free.
 
-## 11. Step 4.1 — WATER PERF PASS (OPEN)
+## 11. Step 4.1 — WATER PERF PASS (CLOSED — "no action", July 21, 2026)
 
 Split out so Step 4 could close on **verified** numbers rather than re-gathering all four after a change. Goal: recover the zoom-in dip on the two devices.
 
@@ -178,6 +178,8 @@ Split out so Step 4 could close on **verified** numbers rather than re-gathering
 - **Candidate: fill cap** — clamp effective water pixel work when the disc fills the frame. Not built.
 
 Close 4.1 when: low tier re-measured post-octave-cut on A06 + Quest 2, and a verdict on whether the governor is worth the complexity (may already be fine at 39–51fps — a playable floor, so this could close as "no further action").
+
+**VERDICT (July 21, 2026): NO ACTION.** 39–51fps zoomed-in is a playable floor; the resolution governor and fill cap are not worth the complexity at bench stage. The low-tier octave cut (2→1) stays committed in the bench. If a real perf problem surfaces once bloom/god-rays land (Step 6, also on the postFX pass), revisit the governor then — it targets exactly the disc-fills-frame case. Closed.
 
 ## 12. Step 4.2 — REFRACTION TONE-MAP FIX (July 21, 2026) — DONE
 
@@ -193,16 +195,65 @@ Confirmed on-device: refraction ON made the sea body wash out, clearest at night
 
 **Watch item (not a blocker):** the renderer's built-in MSAA may not carry through the scene `pass()` on the high-tier refraction path → possible edge aliasing when refraction is on. Bench-acceptable; if visible, set sample count on the pass. Only affects refraction-on high tier.
 
-## 13. Next session
+## 13. Step 4.3 — NIGHT WATER "LIFTED" (OPEN, deferred)
 
-1. **Verify the refraction fix (§12)**: reload high tier, night camera, toggle Refraction — the sea body must now stay dark/plausible instead of glowing washed-out. Confirm no grade shift in terrain/sky between the two paths, exposure slider still works on the refraction path, and check for edge aliasing (MSAA-through-pass watch item).
-2. **Step 4.1 measure**: reload low tier on A06 + Quest 2 after the octave cut; record zoomed-in fps. Decide governor: build or "no action." (Low tier stays on the direct render path — the §12 fix doesn't touch it.)
-3. **Step 5 — rim waterfalls as TSL compute particles** (WebGPU only; CPU fallback = sketch's approach). Watch Rule #4 — compute is all `Fn()`-scoped assigns. Strategic validation for Phase 2 erosion.
-4. Then Step 6 (bloom, god rays, rim glow, **Quest preset toggle** — note: bloom/god-rays will also route through the postFX pass now that it exists) and Step 7 (exit test vs concept art — bench done when the verdict is written).
+On-device after the §12 refraction fix: the sea body at night still reads as **"lifted"** — brighter than it should be relative to the darkened land, so it looks like it floats above the terrain instead of sitting in it. The §12 double-tonemap fix was necessary but did not fully resolve the night look.
 
-**Risk register update:** #1 (depth-texture backend parity → water) **RETIRED** — compiled + ran on WebGPU across desktop + Quest 2 + A06. #2 (TSL compute absent on WebGL2 → waterfalls) still live, mitigated by CPU fallback, tested next.
+**Working hypothesis (not yet confirmed on-device):** the water's brightness at night is dominated by two terms that DON'T track the sun setting:
+1. **Env reflection.** Albedo is near-black (`surfTint`), so the shot is carried by the PMREM nebula reflection. But the baked sky is emissive/constant — it does not dim at night the way sun-lit terrain does. So as the land goes dark, the sea keeps mirroring a bright nebula → relative "lift."
+2. **`deepCol` scatter-in floor** (`vec3(0.014, 0.095, 0.155)`) is a constant added regardless of lighting — a fixed blue glow that stays put while everything around it darkens.
 
-Bench file: `kayangan-bench.html` (v4.2, ~910 lines) — Step 4 water + refraction tone-map fix + panel minimize toggle. Log + bench both in outputs / user's GitHub.
+**Candidate fix (Step 4.3, when picked up):** introduce a day/night factor — reuse the `horizon` term already computed in `setSun()` (drives sun/moon intensity) as a `uNight` uniform, and multiply the water's env-reflection contribution and the `deepCol` scatter floor by it (floored at a small moonlit minimum so night water isn't pure black). Terrain already darkens correctly via the directional lights, so only the water's lighting-independent terms need gating. Keep foam (albedo, already lit) untouched.
+
+**User asked (July 21): "is it lifted because of the incidence angle?" — largely yes, and it sharpens term #1.** The material is `MeshStandardNodeMaterial`, `metalness 0`, near-black albedo, roughness ~0.09. So the look is carried by the dielectric specular env reflection, whose weight is the **Fresnel term** — low (~0.04) looking straight down, →1.0 at grazing incidence. The night camera sits low and looks *across* the disc, so the visible sea ring is grazing → Fresnel ≈ 1 → the water is nearly a pure mirror of the env. Nothing wrong with the Fresnel — it's physically correct. The bug is *what it mirrors*: a baked nebula PMREM with no day/night notion. So it's **Fresnel × (constant-bright sky)** — incidence angle is the multiplier that makes term #1 visible; it is not itself the fault, and the fix is NOT to touch Fresnel. Gating the env contribution (and `deepCol`) by `horizon`/`uNight` still resolves it; grazing angles will then just mirror a correctly-dimmed night sky. (A cheaper partial mitigation if the full gate is fiddly: lower `envMapIntensity` at night via the same `uNight`.)
+
+**Decision:** deferred by user — noted, not fixed. Does not block Step 5. Pick up after the waterfalls, or fold into Step 6 polish.
+
+## 14. Step 5 — RIM WATERFALLS: BUILT, DEVICE-TEST PENDING (July 21, 2026)
+
+The disc-world identity shot — ocean pouring off the rim into the void. Built in `kayangan-bench.html`; **not yet device-tested** (next session's job).
+
+**API pinned from the real r180 source** (not memory): compute-particle path verified against `examples/webgpu_compute_particles*.html` @ tag r180 — `instancedArray(N,'vec3')` + `.element(instanceIndex)` in an `Fn().compute(N)` node, `renderer.computeAsync(init)` once + `renderer.compute(update)` per frame, render via `MeshBasicNodeMaterial` with `vertexNode = billboarding({ position: buf.toAttribute() })` on a `PlaneGeometry` mesh with `mesh.count = N`. Confirmed exports exist in `three.tsl.js`: `instancedArray, instanceIndex, uniformArray, billboarding, hash, uint, deltaTime, cos, PI, If, attribute, uv`.
+
+**Two backends, one `update()` interface (chosen at boot by `isWebGPU`):**
+- **WebGPU — TSL compute** (the strategic validation for Phase 2 GPU erosion / shallow-water). Three `instancedArray` buffers (position, velocity, life). `computeUpdate`: gravity into velocity, integrate, age; alpha fades in off the lip + out near end of life; recycle when below `WF_FLOOR` or aged out. Billboarded additive streaks (0.014×0.17 quads).
+- **WebGL2 — CPU-stepped `THREE.Points`** (the sketch's proven approach). Same constants/motion in JS; round additive sprites via `uv()` falloff (point `uv()` is WebGL-only — WebGPU points are 1px, per the r180 source note, which is *why* the WebGPU path uses billboarded quads instead). Manual `boundingSphere` + `frustumCulled=false` to dodge the known stale-bounds cull bug.
+
+**Emission gated LIVE by sea level, zero rebuild.** Rim height per segment (`rimY`) is captured during `buildWorldGeometry` and stashed on `geo.userData.rimY`; GPU reads it via a static `uniformArray` indexed by emitter slot (`instanceIndex % SEGS`), CPU reads the JS array. `active = rimY < uSeaLevel` is a scalar compare, so dragging the sea slider grows/shrinks the falls instantly (matches the sketch's "recompute on sea change" without any recompute). Emitters spawn at radius 2.50 (just outside the 2.4 lip) at the sea surface, launch slightly outward so the sheet arcs clear of the skirt into the void.
+
+**Safety:** GPU build wrapped in try/catch → CPU fallback on any synchronous setup error (won't white-screen the desktop WebGPU dev path). Node-graph compile errors would still surface at first render, but every node op matches the verified example. Rule #4 honored — all `.assign/.addAssign/.x =` live inside `Fn()` compute scopes.
+
+**UI:** "Rim waterfalls" checkbox (Step 5 group), on by default. Counts per tier: high 7000 / medium 4200 / low 2200. Loop calls `waterfall.update(dt)` before render (GPU dispatches compute ignoring dt; CPU steps with dt).
+
+### 14a. Aesthetic pass (July 21) — first render read as a "picket fence", redesigned
+
+First on-device render (user screenshot, WebGPU high, 60fps — the GPU compute path **runs on desktop WebGPU**, big green tick for Risk #2): waterfalls worked but looked like a **barcode** — evenly-spaced identical bright-white vertical rods with a dead-flat bottom edge. Root causes and fixes (applied to BOTH backends, kept in lockstep via a shared `spawn()`):
+- **Picket fence** ← every one of 220 segments emitted an identical thin collinear column. Fix: **theta jitter** per particle across ~`WF_SPREAD` (3.4) segment-widths so neighbouring columns overlap into continuous **sheets**, + a per-particle **tangential kick** (`WF_TAN`) so the sheet fans/frays instead of dropping as parallel rods.
+- **Uniform density / no clustering** ← binary `active = rimY<sea`. Fix: **depth-weighted flow** `smoothstep(0, WF_DEPTH, sea−rimY)` × a per-particle **seed gate** (`seed < flow`) → deep-submerged rim gushes at full density, barely-dipped rim shows a sparse few, with real gaps. Still 100% live off the sea slider, zero rebuild. (CPU note: `MathUtils.smoothstep` guards `x<=min`, so the edges must be `(sea−WF_DEPTH, sea)` then `1−`; the reversed form silently returns 0.)
+- **Flat curtain hem** ← uniform life + uniform floor. Fix: **per-particle maxLife** (0.55–1.25× `WF_LIFE`, stored in `life.z` / `maxL[]`) so falls fade out at scattered heights, + a **disperse** term thinning alpha toward `WF_FLOOR` (mist dissipation, not a hard cutoff).
+- **Blown-out white** ← 27 collinear additive sprites saturating + high opacity. Fix: opacity mult 0.5→0.30 (GPU) / 0.6→0.42 (CPU), streak thinner+longer (0.010×0.20), soft `sin(uv.y·π)` cap on the quad, per-particle brightness 0.55–1.05 from the seed. Less collinearity (from jitter) also cuts pile-up.
+- lifeBuf widened `vec3`→`vec4` (x=age, y=alpha, z=maxLife, w=seed).
+
+**Verified billboarding from r180 source** (`src/nodes/utils/SpriteUtils.js`): `billboarding({position,horizontal=true,vertical=false})` ends `cameraProjectionMatrix.mul(modelViewMatrix).mul(positionLocal)` — it multiplies the *shared* geometry `positionLocal`, with no per-instance scale hook. So **velocity-stretch (elongating fast particles) needs a custom vertexNode** that scales `positionLocal` by a per-instance factor before the same matrix chain — deferred (higher TSL risk; the jitter+fan already breaks the rod look). This is the top remaining "joy" lever if sheets still read stiff on device.
+
+**Shape knobs (all module-scope consts, tune against concept art):** `WF_SPREAD` (sheet merge), `WF_TAN` (fan width), `WF_DEPTH` (clustering threshold), `WF_OUT` (arc), `WF_GRAV`, `WF_LIFE`, `WF_FLOOR`, `WF_COUNT` per tier, streak dims, opacity mults. No live sliders yet (compute bakes consts at build) — a future UI pass could promote `WF_SPREAD/OUT/DEPTH` to uniforms for live tuning.
+
+**Known edges to watch on-device (next session):**
+- Fallback-of-fallback: if GPU compute throws on a WebGPU device, the CPU Points path renders 1px points there (WebGPU point-size limit). Rare; acceptable; note it if it bites.
+- Still camera-billboarded, not velocity-aligned. Jitter+fan should stop the "floating flecks" read; if it doesn't, do the custom-vertexNode velocity-stretch (above).
+- Additive over the two render paths (direct vs postFX linear pass) will differ slightly in grade; check both. Selective bloom in Step 6 will hit these hard (additive) — grade them together.
+- **Phase-1 XR:** waterfalls live in world space here because the bench disc is world-fixed. The grab rotates the disc → the WaterfallSystem must reparent into the disc group and express spawn/velocity in disc-local space.
+
+## 15. Next session
+
+1. **Device-test Step 5 (§14 + §14a redesign) — the priority.** Desktop WebGPU already renders at 60fps; now check the **redesigned** falls on Samsung A06 + Quest 2. Read for: (a) do they cluster at the low/submerged rim points with gaps elsewhere (not a uniform ring); (b) sea slider grows/shrinks + clusters them live; (c) do they read as **sheets/veils** now, not a picket fence or floating flecks; (d) scattered bottom edge, no flat hem; (e) fps at max config (falls + refraction + time flows) at the higher counts (7000/4200/2200). Force fallback with `?forcewebgl` to check the CPU Points path. Tune the §14a shape knobs against the concept art. **If still stiff → custom-vertexNode velocity-stretch (the deferred lever).**
+2. **Step 4.3 (§13) — night water "lifted"**, if/when picked up: wire the `uNight`/`horizon` gate on env reflection + `deepCol`. Deferred, not blocking.
+3. **Step 6** — selective bloom (will make the additive waterfalls glow — grade them together), cheap radial god rays from the sun, fresnel rim glow on the disc edge, faint under-disc fog, and the **Quest preset toggle**. Bloom/god-rays route through the postFX pass that already exists (§12).
+4. **Step 7** — exit test vs concept art; bench done when the written verdict lands (visual ceiling, what falls off on Quest tier, which modules lift into the Phase-1 scaffold). Resist polishing past it.
+
+**Risk register update:** #1 (depth-texture backend parity → water) **RETIRED**. #2 (TSL compute absent on WebGL2 → waterfalls) — GPU path now **built and API-verified against r180 source**; CPU fallback built for WebGL2. Downgraded from "live" to **"verify on-device"**: confirm the WebGPU compute path actually runs on Quest 2's experimental WebGPU and measure headroom; the WebGL2 fallback removes the hard blocker regardless.
+
+Bench file: `kayangan-bench.html` (v5.1, ~1135 lines) — Step 5 rim waterfalls **redesigned** (§14a: clustered/fanned/variable-life sheets, WebGPU compute + WebGL2 CPU fallback) on top of Step 4 water + §12 refraction fix + panel toggle. Log + bench both in outputs / user's GitHub.
 ---
 
 User's stated interests: procedural generation, environmental storytelling, symbolic world-building. Target hardware: Quest-class. Development so far is desktop-first single-file sketches in a folder served statically alongside index.html. User location context: Malaysia (hence *Kayangan*).
