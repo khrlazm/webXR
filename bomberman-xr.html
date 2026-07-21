@@ -507,11 +507,76 @@ function initThree(){
            new THREE.MeshLambertMaterial({color:0xff5d5d,emissive:0x3a0000}),
            new THREE.MeshLambertMaterial({color:0x5fd08a,emissive:0x003316})];
 
+  initVRUI();
   window.addEventListener('resize',onResize);
   clock=new THREE.Clock();
   renderer.setAnimationLoop(loop);
 }
-function onResize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+
+/* =========================================================================
+   IN-VR UI — the DOM HUD/banner/buttons don't render in an immersive session,
+   so we draw a floating canvas scoreboard above the diorama and map the
+   controller face buttons to New-arena / Exit-VR.
+   ========================================================================= */
+let vrUI=null;
+function roundRectPath(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+function initVRUI(){
+  const cv=document.createElement('canvas'); cv.width=512; cv.height=300;
+  const tex=new THREE.CanvasTexture(cv); tex.anisotropy=4;
+  const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false});
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(0.9,0.9*cv.height/cv.width),mat);
+  mesh.renderOrder=999; mesh.visible=false;
+  mesh.position.set(0,1.35,-0.7); mesh.rotation.x=-0.16;   // scoreboard hovering over the table
+  scene.add(mesh);
+  vrUI={cv,ctx:cv.getContext('2d'),tex,mesh};
+}
+function drawVRUI(){
+  if(!vrUI) return;
+  const {ctx,cv,tex}=vrUI, W2=cv.width, H2=cv.height;
+  ctx.clearRect(0,0,W2,H2); ctx.textAlign='left';
+  ctx.fillStyle='rgba(12,16,22,0.82)'; roundRectPath(ctx,2,2,W2-4,H2-4,22); ctx.fill();
+  ctx.strokeStyle='rgba(70,92,116,0.9)'; ctx.lineWidth=3; ctx.stroke();
+  ctx.fillStyle='#e7e2d3'; ctx.font='bold 30px monospace'; ctx.textBaseline='top';
+  ctx.fillText('BOMB ARENA',26,20);
+  ctx.fillStyle='#ff7a3c'; ctx.font='15px monospace';
+  ctx.fillText(mode==='client'?'ONLINE':(mode==='host'?'ROOM':'LOCAL'),28,56);
+  const cols=['#ff5d5d','#4ea3ff','#5fd08a','#e2c14a'];
+  let y=92;
+  players.forEach(p=>{ if(!p)return;
+    ctx.globalAlpha=p.alive?1:0.32;
+    ctx.fillStyle=cols[p.id]; ctx.beginPath(); ctx.arc(42,y+13,11,0,TAU); ctx.fill();
+    ctx.fillStyle='#e7e2d3'; ctx.font='21px monospace';
+    const nm=(p.id===localId?'YOU':(p.isBot?'BOT':'P'+(p.id+1)));
+    ctx.fillText(nm+'   ✦'+p.maxBombs+'   ⟶'+p.range+(p.alive?'':'   ✗'),66,y);
+    ctx.globalAlpha=1; y+=36;
+  });
+  ctx.fillStyle='#8a94a3'; ctx.font='15px monospace'; ctx.textAlign='right';
+  ctx.fillText('stick move  ·  trigger bomb',W2-26,26);
+  ctx.fillText('A new arena  ·  B exit VR',W2-26,48);
+  ctx.textAlign='left';
+  if(roundOver){
+    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,H2/2-30,W2,72);
+    ctx.fillStyle='#ffd24a'; ctx.font='bold 36px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const nm=winner<0?'DRAW':(winner===localId?'YOU WIN':(players[winner]&&players[winner].isBot?'BOT '+(winner+1)+' WINS':'P'+(winner+1)+' WINS'));
+    ctx.fillText(nm,W2/2,H2/2+6);
+    ctx.textAlign='left'; ctx.textBaseline='top';
+  }
+  tex.needsUpdate=true;
+}
+const _vrb={a:false,b:false};
+function handleVRButtons(){
+  const session=renderer.xr.getSession(); if(!session) return;
+  let a=false,b=false;
+  for(const src of session.inputSources){ const gp=src.gamepad; if(!gp) continue;
+    if(gp.buttons[4]&&gp.buttons[4].pressed) a=true;   // A / X
+    if(gp.buttons[5]&&gp.buttons[5].pressed) b=true;   // B / Y
+  }
+  if(a&&!_vrb.a&&mode!=='client') regenerate();        // new arena
+  if(b&&!_vrb.b){ try{session.end();}catch(e){} }       // exit VR
+  _vrb.a=a; _vrb.b=b;
+}
+function onResize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);
+  if(renderer.xr&&!renderer.xr.isPresenting) frameFlat();}   // refit the board when the viewport changes
 
 function clearBoardMeshes(){
   while(boardGroup.children.length) boardGroup.remove(boardGroup.children[0]);
@@ -622,10 +687,25 @@ function setupTouch(){
    ========================================================================= */
 function frameFlat(){
   boardGroup.scale.setScalar(1); boardGroup.position.set(0,0,0);
-  const span=Math.max(W,H);
+  // Aspect-aware fit: pull the camera back far enough that the whole board fits
+  // in BOTH the vertical fov (depth) and the horizontal fov (width). On tall
+  // portrait phones the horizontal fov is tiny, so this zooms way out.
+  const aspect=camera.aspect||(innerWidth/innerHeight);
+  const vfov=camera.fov*Math.PI/180;
+  const hfov=2*Math.atan(Math.tan(vfov/2)*aspect);
+  const margin=1.3;                                        // extra ring of empty tiles
+  const dW=(W/2+margin)/Math.tan(hfov/2);                  // distance so width fits
+  const dH=(H/2+margin)/Math.tan(vfov/2)*1.35;             // distance so depth fits (×tilt foreshorten)
+  const dist=Math.max(dW,dH);
+  // steeper, more top-down tilt on portrait so a tall board isn't foreshortened off-screen
+  const dy=aspect<1?0.90:0.82;                             // unit view-direction (y component)
+  const dz=Math.sqrt(Math.max(1e-4,1-dy*dy));
   flatCamRig.position.set(0,0,0);
-  camera.position.set(0, span*0.80, span*0.54);
-  camera.lookAt(0,0,0.5);
+  camera.position.set(0, dist*dy, dist*dz);
+  camera.lookAt(0,0,0);
+  // keep fog behind the board instead of over it (board is far from camera now)
+  if(scene.fog){ const radius=0.5*Math.hypot(W,H); scene.fog.near=dist+radius; scene.fog.far=dist+radius*2+12; }
+  if(vrUI) vrUI.mesh.visible=false;                        // DOM HUD handles flat mode
 }
 function frameVR(){
   // arena becomes a table diorama ~0.85m across, ~0.8m high, in front of you
@@ -633,6 +713,7 @@ function frameVR(){
   const s=0.85/span;
   boardGroup.scale.setScalar(s);
   boardGroup.position.set(0,0.78,-0.55);
+  if(vrUI) vrUI.mesh.visible=true;                         // show the in-VR scoreboard
 }
 function enterVR(){
   if(!navigator.xr) return;
@@ -800,8 +881,10 @@ function loop(){
     updateHUD();
     if(roundOver && now()-roundEndAt>3 && (mode!=='client')) resetRound();
   }
+  if(renderer.xr.isPresenting){ handleVRButtons(); if(now()-_vrUIt>0.12){_vrUIt=now(); drawVRUI();} }
   renderer.render(scene,camera);
 }
+let _vrUIt=0;
 function updateEntityMeshes(dt){
   players.forEach(p=>{ const g=meshPlayers[p.id]; if(!g)return;
     g.visible=p.alive; g.position.set(p.x,0,p.z);
