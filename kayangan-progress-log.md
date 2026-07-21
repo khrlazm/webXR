@@ -263,16 +263,51 @@ New knobs from this pass (module-scope consts): `wfField` lobe frequencies/speed
 
 - **Terrain palette (user: "less sand, more darker green").** In `terrainColorNode` / `BIOME`: sand muted `(0.76,0.68,0.49)`→`(0.64,0.575,0.41)`; grass darkened/greened `(0.33,0.47,0.22)`→`(0.205,0.355,0.15)`; forest deepened `(0.165,0.34,0.19)`→`(0.11,0.255,0.135)`. Beach band **tightened** so grass takes over near the waterline: sand→grass ramp `smoothstep(0.012,0.05)`→`(-0.005,0.020)`; grass→forest widened/lowered `(0.09,0.17)`→`(0.05,0.14)`; forest→rock nudged up `(0.21,0.30)`→`(0.23,0.31)` so green owns more of the slope. Roughness `sandMask` realigned to the thinner beach. Net: a thin beach line, dark green dominating the land. Further tuning = push grass/forest darker or widen the green→rock ramp.
 
-## 15. Next session
+## 15. Step 6 — POST + ATMOSPHERE: BUILT, DEVICE-TEST PENDING (July 21, 2026)
 
-1. **Device-test Step 5 (§14 + §14a + §14b) — the priority.** Desktop WebGPU already renders at 60fps; now check the twice-revised falls on Samsung A06 + Quest 2. Read for: (a) falls **cluster and drift** around the rim, no uniform ring (§14b field); (b) cascade is **full at boot**, no lifted/bunched warm-up (§14b pre-distribution); (c) sea slider grows/shrinks + clusters them live; (d) they read as **sheets/veils**, not a picket fence or floating flecks; (e) scattered bottom edge, no flat hem; (f) fps at max config (falls + refraction + time flows) at the higher counts (7000/4200/2200). Force fallback with `?forcewebgl` — falls should now RENDER on WebGL2 (instanced quads, §14c) and look the same as WebGPU; if still empty, the `Mesh+count` instancing on that backend is the thing to check. Tune the §14a/§14b knobs against the concept art. **If sheets still read stiff → custom-vertexNode velocity-stretch (the deferred lever).**
-2. **Step 4.3 (§13) — night water "lifted"**, if/when picked up: wire the `uNight`/`horizon` gate on env reflection + `deepCol`. Deferred, not blocking.
-3. **Step 6** — selective bloom (will make the additive waterfalls glow — grade them together), cheap radial god rays from the sun, fresnel rim glow on the disc edge, faint under-disc fog, and the **Quest preset toggle**. Bloom/god-rays route through the postFX pass that already exists (§12).
-4. **Step 7** — exit test vs concept art; bench done when the written verdict lands (visual ceiling, what falls off on Quest tier, which modules lift into the Phase-1 scaffold). Resist polishing past it.
+The final bench layer — the polish that closes the gap to concept art. Built in `kayangan-bench.html`; **not yet device-tested** (Step 5 device-test still precedes this — see §16). Four effects + the Quest-preset A/B, all routed through the ONE scene `pass()` that already existed for refraction (§12).
 
-**Risk register update:** #1 (depth-texture backend parity → water) **RETIRED**. #2 (TSL compute absent on WebGL2 → waterfalls) — GPU path now **built and API-verified against r180 source**; CPU fallback built for WebGL2. Downgraded from "live" to **"verify on-device"**: confirm the WebGPU compute path actually runs on Quest 2's experimental WebGPU and measure headroom; the WebGL2 fallback removes the hard blocker regardless.
+**API pinned from real r180 source, not memory** (project rule):
+- `bloom(input, strength, radius, threshold)` from `three/addons/tsl/display/BloomNode.js` — params are internal uniforms (`.strength/.radius/.threshold.value`), so sliders grade live with no graph rebuild. Selective-by-**threshold** (no MRT): in LINEAR space the ×30 sun disc and dense additive-waterfall overlaps clear the knee, lit terrain mostly doesn't. Verified the MRT `bloomIntensity` pattern too (`webgpu_postprocessing_bloom_selective`) — kept as the documented upgrade if sunlit snow blooms on-device; skipped for now to keep Quest off a 2nd render target.
+- `fxaa(node)` from `three/addons/tsl/display/FXAANode.js`, and `renderOutput(node)` from `three/tsl`.
+- No god-rays node ships in r180 (`display/` has Bloom, Lensflare, GaussianBlur, Anamorphic, MotionBlur… but no light-scattering) → **custom** radial-blur, GPU-Gems style.
+- `positionViewDirection = normalize(-positionView)` (view space) — pinned from `src/nodes/accessors/Position.js`, paired with `normalView` for a correctly-signed rim fresnel.
+- Texture sampling at arbitrary uv = `textureNode.sample(uv)` (pinned from Bloom + GaussianBlur nodes).
 
-Bench file: `kayangan-bench.html` (v5.3, ~1195 lines) — Step 5 waterfalls: WebGL2 fallback repaired (instanced billboarded quads on both backends, §14c) + drifting-field/warm-up passes (§14a/b); terrain palette retuned (less sand, darker green). Over Step 4 water + §12 refraction fix + panel toggle. Log + bench both in outputs / user's GitHub.
+**Pipeline order is load-bearing (rule #2 — double tone-map bit us twice already):**
+```
+sceneColor (LINEAR = scenePass.getTextureNode())
+  .add( bloom(sceneColor) )        // linear additive glow
+  .add( godRays(sceneColor) )      // linear additive shafts
+  → renderOutput()                 // AgX + sRGB applied EXACTLY once
+  → fxaa()                         // AA MUST run in display space (post-tonemap)
+```
+`postFX.outputColorTransform = false` because `renderOutput()` now owns the single tone-map. Composed in `rebuildPost()`, which re-plumbs `postFX.outputNode` when god-rays / FXAA / preset toggle (structural); bloom + all strengths are uniforms and need no rebuild.
+
+**The four effects:**
+1. **Selective bloom** — threshold ~1.3 default (slider 0–4). Makes the sun disc glow and the dense waterfall sheets bloom (the §15-note intent — graded together, since both are the bright additive things in an otherwise dark frame).
+2. **God rays** — `buildGodRays()` marches `GR_SAMPLES=24` steps from each pixel toward the sun's screen-uv, sampling `sceneColor`, keeping only luma > `GR_THRESH` (so only sun/near-sun sky streaks), decaying `GR_DECAY=0.92`/step, warm-tinted × `uGodStrength` × `uSunVis`. **Unrolled in JS (plain node reassignment, no `Loop`/`.assign`) → rule-#4-safe at graph scope.** Because the dark disc reads ~0, shafts stream *around* the silhouette (crepuscular). Sun screen-uv + visibility computed CPU-side each frame in `updateSunScreen()` (`_sunPoint = camPos + sunDir·100`, `.project(camera)`; vis = in-front × screen-edge-fade × elevation-fade). Off-screen/behind/below-horizon → `uSunVis=0` → whole node = 0 (and out-of-range samples clamp to dark edge — safe).
+3. **Fresnel rim glow** — added to the terrain material as `emissiveNode = RIM_COL · pow(1−clamp(dot(normalView,positionViewDirection)),3.2) · uRimStrength`. Glows at the silhouette (top rim + skirt edges) independent of sun light; bloom softens it. **View-dependent on purpose** — the rim tracks the camera, so this correctly uses VIEW space (unlike the rotation-proof LOCAL `colorNode`). Not an XR-rotation concern.
+4. **Under-disc fog** — one camera-billboarded (`billboarding({position: positionLocal})`) additive soft quad (7.6u) at y −1.75, radial `uv()` falloff × faint teal × `uFogStrength`. `depthTest` on / `depthWrite` off → the disc body occludes it, so it reads as a halo peeking below/around the rim where the falls dissipate. Cheapest volumetric stand-in.
+
+**Quest preset toggle** ("bloom only") — strips god-rays + FXAA from the post graph (`rebuildPost`) and zeroes rim + fog uniforms/mesh (`applyPostGating`), leaving tone-map + bloom. An honest *desktop* A/B of "what Quest ships" vs the full stack, live, no reload. Independent of the `?q=` tier (which governs resolution/octaves/cube/PR) — this gates the POST stack specifically. God-rays/rim/fog rows dim when it's on.
+
+**Consequence — the scene pass is now ALWAYS used** (bloom is baseline on every tier), so the cheaper direct `renderer.render()` path from §12 is **retired**. Refraction still samples this pass's linear buffer; opaque geo tone-maps identically. This revives the §12 watch-item (MSAA doesn't carry through `pass()`) on ALL tiers, not just refraction-high — hence FXAA is wired in (default follows `TIER.antialias`: on high/med, off low). §11's parked resolution-governor is the lever if bloom fill-cost bites the zoom-in case on device.
+
+**UI:** new "Step 6 · Post + Atmosphere" panel group — Quest-preset / God-rays / FXAA checkboxes + Bloom strength, Bloom threshold, God rays, Rim glow, Under-disc fog sliders. Bench now **v6.0**.
+
+**Both-backend note:** bloom/fxaa/renderOutput/PostProcessing all run on the WebGPURenderer WebGL2 backend (the bench already proved PostProcessing on both via §12); god-rays is plain multi-tap texture sampling → GLSL + WGSL. Verify on `?forcewebgl` anyway.
+
+## 16. Next session
+
+1. **Device-test Step 5 (§14 + §14a + §14b) first — still the priority**, independent of Step 6 (toggle post off-ish via the Quest preset while reading the falls). Desktop WebGPU renders at 60fps; check the twice-revised falls on Samsung A06 + Quest 2: (a) cluster + drift around the rim, no uniform ring; (b) full at boot, no warm-up; (c) sea slider grows/clusters live; (d) read as sheets/veils not a picket fence; (e) scattered hem; (f) fps at max config. `?forcewebgl` → falls should RENDER on WebGL2 (instanced quads, §14c). **If sheets read stiff → custom-vertexNode velocity-stretch (deferred lever).**
+2. **Device-test Step 6 (§15) — the new work.** Read for: (a) **sun glow + waterfall sheets bloom**, lit snow/terrain does NOT wash out (if it does → raise threshold, or go MRT selective); (b) **god rays** stream around the disc silhouette, fade correctly as the sun nears screen edge / sets / goes behind camera (no rays when `uSunVis`→0), no smear from bright water; (c) **rim glow** reads as a thin atmospheric limb on the disc edge, tracks the camera, doesn't over-glow the whole top; (d) **under-disc fog** sits as a faint halo below the rim, not a visible flat quad edge from low angles; (e) **Quest-preset A/B** — measure fps bloom-only vs full stack on A06 + Quest 2 at max water config; this is the number that decides what post Quest actually ships. Grade all five sliders against the concept art. Watch AgX grade parity direct-vs-refraction paths now that post is always-on.
+3. **Step 4.3 (§13) — night water "lifted"**, optional fold-in: gate env reflection + `deepCol` by `uNight`/`horizon`. Deferred, not blocking.
+4. **Step 7 — exit test** vs concept art; written verdict (visual ceiling, what falls off on Quest, which modules lift into the Phase-1 scaffold). Bench done when the verdict lands — resist polishing past it.
+
+**Risk register update:** #1 (depth parity → water) **RETIRED**. #2 (TSL compute on WebGL2 → waterfalls) — built + API-verified, **"verify on-device"**. #4 (bloom cost on Quest → Step 6) — **now live**: bloom is baseline/always-on; the Quest-preset toggle is built specifically to measure it. Mitigations staged: threshold-only bloom (no MRT), FXAA off on low, §11 resolution-governor still on the shelf.
+
+Bench file: `kayangan-bench.html` (v6.0, ~1410 lines) — Step 6 post + atmosphere: threshold bloom + custom radial god-rays + fresnel rim glow + under-disc fog + Quest-preset A/B, all through the §12 pass (`outputColorTransform=false` → single `renderOutput()` tone-map → display-space FXAA). Scene pass now always-on; direct path retired. Over Step 5 waterfalls (§14a–c) + Step 4 water + §12 refraction fix. Log + bench both in outputs / user's GitHub.
 ---
 
 User's stated interests: procedural generation, environmental storytelling, symbolic world-building. Target hardware: Quest-class. Development so far is desktop-first single-file sketches in a folder served statically alongside index.html. User location context: Malaysia (hence *Kayangan*).

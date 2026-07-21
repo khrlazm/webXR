@@ -176,6 +176,30 @@
     <label>Exposure <span id="v-ex">1.00</span></label>
     <input id="s-ex" type="range" min="0.2" max="2.5" step="0.05" value="1.0">
   </div>
+  <div class="sub" style="margin:10px 0 8px">Step 6 · Post + Atmosphere</div>
+  <label class="check"><input id="c-quest" type="checkbox"> Quest preset (bloom only)</label>
+  <label class="check"><input id="c-god" type="checkbox" checked> God rays</label>
+  <label class="check"><input id="c-fxaa" type="checkbox"> FXAA</label>
+  <div class="row" id="r-bloom">
+    <label>Bloom strength <span id="v-bloom">0.70</span></label>
+    <input id="s-bloom" type="range" min="0" max="2" step="0.05" value="0.7">
+  </div>
+  <div class="row" id="r-thr">
+    <label>Bloom threshold <span id="v-thr">1.30</span></label>
+    <input id="s-thr" type="range" min="0" max="4" step="0.05" value="1.3">
+  </div>
+  <div class="row" id="r-god">
+    <label>God rays <span id="v-god">0.55</span></label>
+    <input id="s-god" type="range" min="0" max="2" step="0.05" value="0.55">
+  </div>
+  <div class="row" id="r-rim">
+    <label>Rim glow <span id="v-rim">0.50</span></label>
+    <input id="s-rim" type="range" min="0" max="2" step="0.05" value="0.5">
+  </div>
+  <div class="row" id="r-fog">
+    <label>Under-disc fog <span id="v-fog">0.50</span></label>
+    <input id="s-fog" type="range" min="0" max="2" step="0.05" value="0.5">
+  </div>
   <div class="hint">
     Drag to orbit · wheel to zoom.<br>
     <code>?forcewebgl</code> WebGL2 path · <code>?q=low|medium|high</code>
@@ -195,7 +219,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
   Fn, float, vec2, vec3, vec4, uniform,
-  positionLocal, normalLocal, normalize, dot, pow, max, exp, abs,
+  positionLocal, normalLocal, normalize, dot, pow, max, min, clamp, step, exp, abs,
   mix, smoothstep, fract, sin, floor, length,
   mx_noise_float, pmremTexture, cubeTexture,
   // Step 4 — water
@@ -206,8 +230,15 @@ import {
   pass,
   // Step 5 — rim waterfalls (WebGPU compute particles + billboarded streaks)
   instancedArray, instanceIndex, uniformArray, billboarding,
-  hash, uint, deltaTime, cos, PI, If, attribute, uv
+  hash, uint, deltaTime, cos, PI, If, attribute, uv,
+  // Step 6 — post + atmosphere
+  renderOutput, positionViewDirection, normalView
 } from 'three/tsl';
+// Step 6 post nodes (ship in three r180 examples; resolve via the addons importmap).
+// bloom = selective-by-threshold glow; fxaa = display-space AA (MSAA does NOT carry
+// through the scene pass(), and Step 6 makes that pass always-on — see §16 in the log).
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { fxaa }  from 'three/addons/tsl/display/FXAANode.js';
 
 /* ============================================================
    QUALITY TIERS — every shader must survive the low tier.
@@ -550,6 +581,18 @@ const terrainRoughnessNode = Fn(() => {
 const terrainMat = new THREE.MeshStandardNodeMaterial({ metalness: 0.0 });
 terrainMat.colorNode = terrainColorNode();
 terrainMat.roughnessNode = terrainRoughnessNode();
+
+// ---- Step 6: fresnel rim glow on the disc edge (atmospheric limb) ----
+// View-space fresnel: bright where the surface turns away from the eye (the
+// silhouette / disc rim + skirt edges). Written as EMISSIVE so it glows
+// independent of sun lighting and gets picked up by bloom for a soft halo.
+// View-dependent on purpose — the rim should track the camera, not the disc,
+// so this correctly uses view-space (unlike the rotation-proof LOCAL colorNode).
+const uRimStrength = uniform(0.5);
+const RIM_COL = new THREE.Color(0.42, 0.66, 1.0); // cool atmosphere blue
+const rimFacing = clamp(dot(normalView, positionViewDirection), float(0.0), float(1.0));
+const rimTerm   = pow(float(1.0).sub(rimFacing), float(3.2)).mul(uRimStrength);
+terrainMat.emissiveNode = vec3(RIM_COL.r, RIM_COL.g, RIM_COL.b).mul(rimTerm);
 
 const world = new THREE.Mesh(buildWorldGeometry(SEED), terrainMat);
 scene.add(world);
@@ -968,6 +1011,33 @@ const ambient = new THREE.AmbientLight(0x223344, 0.15);
 scene.add(ambient);
 
 /* ============================================================
+   STEP 6 — UNDER-DISC FOG (faint atmosphere beneath the world)
+   A soft additive, camera-billboarded glow blob sitting just
+   under the disc. depthTest stays ON (depthWrite off) so the
+   disc body occludes it — the haze reads as a halo peeking out
+   below/around the rim, where the waterfalls dissipate into the
+   void, matching the concept art's misted base. Cheapest possible
+   volumetric stand-in: one transparent quad. Gated off by the
+   Quest preset.
+   ============================================================ */
+const uFogStrength = uniform(0.5);
+const FOG_COL = new THREE.Color(0.34, 0.52, 0.86);
+const fogMat = new THREE.MeshBasicNodeMaterial();
+fogMat.transparent = true;
+fogMat.depthWrite  = false;
+fogMat.blending    = THREE.AdditiveBlending;
+fogMat.side        = THREE.DoubleSide;
+const fogR    = length(uv().sub(0.5)).mul(2.0);            // 0 centre -> 1 edge
+const fogGlow = clamp(float(1.0).sub(fogR), float(0.0), float(1.0));
+const fogSoft = fogGlow.mul(fogGlow);                      // soft radial falloff
+fogMat.colorNode   = vec3(FOG_COL.r, FOG_COL.g, FOG_COL.b).mul(fogSoft).mul(uFogStrength);
+fogMat.opacityNode = fogSoft;                             // additive; opacity shapes the edge
+fogMat.vertexNode  = billboarding({ position: positionLocal }); // face the camera from any orbit
+const fogMesh = new THREE.Mesh(new THREE.PlaneGeometry(7.6, 7.6), fogMat);
+fogMesh.position.set(0, -1.75, 0);                        // just below the skirt tip (TIP_Y -1.55)
+scene.add(fogMesh);
+
+/* ============================================================
    CAMERA + CONTROLS
    ============================================================ */
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2000);
@@ -996,9 +1066,110 @@ controls.target.set(0, 0, 0);
    still honored by the output transform, so the slider works
    unchanged; opaque terrain/sky look identical on both paths.
    ============================================================ */
-const postFX = new THREE.PostProcessing(renderer);
-postFX.outputNode = pass(scene, camera);
 const usesRefraction = () => waterOpts.depthFX && waterOpts.refraction;
+
+/* ============================================================
+   STEP 6 — POST STACK (bloom · god rays · FXAA · Quest preset)
+   All routed through the ONE scene pass() that already existed
+   for refraction (§12). Bloom is now baseline on every tier
+   (incl. Quest), so this pass is ALWAYS used — the cheaper
+   direct renderer.render() path is retired (see §16).
+
+   Pipeline order is load-bearing (this project has been bitten
+   by double tone-mapping twice — rule #2):
+     sceneColor (LINEAR)
+       + bloom(sceneColor)        ← linear, additive glow
+       + godRays(sceneColor)      ← linear, additive light shafts
+       → renderOutput()           ← AgX + sRGB applied EXACTLY once
+       → fxaa()                   ← AA must run in display space
+   outputColorTransform is turned OFF because renderOutput() now
+   owns the single tone-map (pinned from the r180 bloom + fxaa
+   examples). Bloom "selects" by luminance threshold in linear
+   space: the ×30 sun disc and the additive waterfalls clear it,
+   lit terrain mostly doesn't. (If sunlit snow blooms undesirably
+   on-device, the upgrade is MRT bloomIntensity — pattern pinned
+   from webgpu_postprocessing_bloom_selective; deferred to keep
+   the Quest tier off a second render target.)
+   ============================================================ */
+const postFX = new THREE.PostProcessing(renderer);
+postFX.outputColorTransform = false; // renderOutput() owns the single tone-map
+
+const scenePass  = pass(scene, camera);
+const sceneColor = scenePass.getTextureNode(); // linear HDR scene color
+
+// ---- bloom (params live as uniforms on the node; graded live below) ----
+const bloomPass = bloom(sceneColor, /*strength*/ 0.70, /*radius*/ 0.60, /*threshold*/ 1.30);
+
+// ---- god rays: radial blur toward the sun's screen position ----
+// GPU-Gems-style light scattering. March from each pixel toward the sun's
+// projected screen point, sampling the LINEAR scene color and keeping only
+// bright (sun / near-sun sky) energy, decaying per step. Where the dark disc
+// blocks the ray the samples read ~0, so the shafts stream AROUND the
+// silhouette. Unrolled in JS (plain node reassignment) — no Loop / no
+// .assign(), so it's rule-#4-safe at graph scope.
+const GR_SAMPLES  = 24;
+const GR_DECAY    = 0.92;   // per-step weight falloff
+const GR_THRESH   = 1.00;   // linear luma a pixel must exceed to streak
+const GR_TINT     = new THREE.Color(1.0, 0.86, 0.62);
+const uGodStrength = uniform(0.55);
+const uSunScreen   = uniform(new THREE.Vector2(0.5, 0.5)); // sun in screen-uv (CPU each frame)
+const uSunVis      = uniform(0.0);                          // 0 when sun off-screen / behind / set
+function buildGodRays() {
+  const here   = uv();
+  const stepUV = uSunScreen.sub(here).div(float(GR_SAMPLES)); // even march to the sun
+  const lumaW  = vec3(0.2126, 0.7152, 0.0722);
+  let acc = vec3(0.0);
+  let w = 1.0;
+  for (let i = 0; i < GR_SAMPLES; i++) {
+    const s    = sceneColor.sample(here.add(stepUV.mul(i))).rgb;
+    const luma = dot(s, lumaW);
+    const mask = smoothstep(float(GR_THRESH), float(GR_THRESH + 0.6), luma);
+    acc = acc.add(s.mul(mask).mul(w));
+    w *= GR_DECAY;
+  }
+  acc = acc.div(float(GR_SAMPLES));
+  const rays = acc.mul(vec3(GR_TINT.r, GR_TINT.g, GR_TINT.b)).mul(uGodStrength).mul(uSunVis);
+  return vec4(rays, 0.0); // vec4 (alpha 0) so the additive chain stays vec4-consistent
+}
+const godNode = buildGodRays();
+
+// ---- effect flags + graph (re)composition ----
+const postOpts = { godrays: true, fxaa: TIER.antialias, rim: 0.5, fog: 0.5, quest: false };
+
+function rebuildPost() {
+  let linear = sceneColor.add(bloomPass);                       // bloom = baseline (Quest keeps it)
+  if (!postOpts.quest && postOpts.godrays) linear = linear.add(godNode);
+  let out = renderOutput(linear);                               // AgX + sRGB, once
+  if (!postOpts.quest && postOpts.fxaa)    out = fxaa(out);     // AA in display space
+  postFX.outputNode = out;
+}
+
+// rim glow + under-disc fog are scene-space (uniform / visibility), so the
+// Quest preset gates them without touching the post graph.
+function applyPostGating() {
+  const full = !postOpts.quest;
+  uRimStrength.value = full ? postOpts.rim : 0.0;
+  uFogStrength.value = full ? postOpts.fog : 0.0;
+  fogMesh.visible    = full && postOpts.fog > 0.0;
+}
+rebuildPost();
+applyPostGating();
+
+// ---- sun screen-space position + visibility for the god rays (CPU/frame) ----
+const _sunPoint = new THREE.Vector3();
+const _camFwd   = new THREE.Vector3();
+function updateSunScreen() {
+  camera.getWorldDirection(_camFwd);
+  const facing = _camFwd.dot(uSunDir.value);                   // >0 = sun in front hemisphere
+  _sunPoint.copy(uSunDir.value).multiplyScalar(100).add(camera.position);
+  _sunPoint.project(camera);                                   // -> NDC
+  uSunScreen.value.set(_sunPoint.x * 0.5 + 0.5, _sunPoint.y * 0.5 + 0.5);
+  const inFront = facing > 0.05 ? 1 : 0;
+  const mx   = Math.max(Math.abs(_sunPoint.x), Math.abs(_sunPoint.y));
+  const edge = 1 - THREE.MathUtils.smoothstep(mx, 0.8, 1.35);  // fade as sun nears/leaves screen
+  const elev = THREE.MathUtils.smoothstep(uSunDir.value.y, -0.05, 0.15); // fade as sun sets
+  uSunVis.value = inFront * edge * elev;
+}
 
 /* ============================================================
    UI WIRING
@@ -1111,6 +1282,50 @@ els.cDepth.addEventListener('change', () => {
 const cWaterfall = document.getElementById('c-waterfall');
 cWaterfall.addEventListener('change', () => { waterfall.object.visible = cWaterfall.checked; });
 
+// ---- Step 6: post + atmosphere wiring ----
+const p6 = {
+  quest: document.getElementById('c-quest'),
+  god:   document.getElementById('c-god'),   fxaa:  document.getElementById('c-fxaa'),
+  bloom: document.getElementById('s-bloom'), vBloom: document.getElementById('v-bloom'),
+  thr:   document.getElementById('s-thr'),   vThr:  document.getElementById('v-thr'),
+  gods:  document.getElementById('s-god'),   vGod:  document.getElementById('v-god'),
+  rim:   document.getElementById('s-rim'),   vRim:  document.getElementById('v-rim'),
+  fog:   document.getElementById('s-fog'),   vFog:  document.getElementById('v-fog'),
+  rBloom: document.getElementById('r-bloom'), rThr: document.getElementById('r-thr'),
+  rGod: document.getElementById('r-god'), rRim: document.getElementById('r-rim'), rFog: document.getElementById('r-fog'),
+};
+p6.fxaa.checked = postOpts.fxaa; // default AA follows the tier (off on low)
+
+// live-graded uniforms (no graph rebuild)
+const bindP6 = (input, label, digits, set) => {
+  const apply = () => { const v = parseFloat(input.value); label.textContent = v.toFixed(digits); set(v); };
+  input.addEventListener('input', apply); apply();
+};
+bindP6(p6.bloom, p6.vBloom, 2, v => { bloomPass.strength.value = v; });
+bindP6(p6.thr,   p6.vThr,   2, v => { bloomPass.threshold.value = v; });
+bindP6(p6.gods,  p6.vGod,   2, v => { uGodStrength.value = v; });
+bindP6(p6.rim,   p6.vRim,   2, v => { postOpts.rim = v; applyPostGating(); });
+bindP6(p6.fog,   p6.vFog,   2, v => { postOpts.fog = v; applyPostGating(); });
+
+// structural toggles (recompose the post graph)
+p6.god.addEventListener('change',  () => { postOpts.godrays = p6.god.checked;  rebuildPost(); });
+p6.fxaa.addEventListener('change', () => { postOpts.fxaa    = p6.fxaa.checked; rebuildPost(); });
+
+// Quest preset: strip everything but tone-map + bloom, live, for an honest
+// desktop A/B of "what Quest ships" vs the full desktop post stack.
+function reflectPreset() {
+  const on = postOpts.quest;
+  [p6.rGod, p6.rRim, p6.rFog].forEach(r => r.classList.toggle('dim', on));
+  p6.god.disabled = on; p6.fxaa.disabled = on;
+}
+p6.quest.addEventListener('change', () => {
+  postOpts.quest = p6.quest.checked;
+  applyPostGating();   // kill rim + fog uniforms/mesh
+  rebuildPost();       // drop god rays + fxaa from the graph
+  reflectPreset();
+});
+reflectPreset();
+
 // ---- Panel minimize ----
 const panel = document.getElementById('panel');
 const panelToggle = document.getElementById('panel-toggle');
@@ -1169,11 +1384,12 @@ renderer.setAnimationLoop(() => {
   }
 
   controls.update();
-  if (usesRefraction()) {
-    postFX.render();            // linear scene buffer → AgX applied once at output
-  } else {
-    renderer.render(scene, camera); // cheaper direct path (low tier / no refraction)
-  }
+  updateSunScreen();            // Step 6: project the sun to screen-uv for god rays
+  // Step 6: bloom is baseline on every tier, so the scene pass is always used.
+  // Water refraction still samples this pass's LINEAR buffer; renderOutput()
+  // applies AgX exactly once at the tail (§16). The old direct render() path
+  // (cheaper, no post) is retired now that bloom ships on all tiers.
+  postFX.render();
 
   frames++;
   msAccum += frameMs;
