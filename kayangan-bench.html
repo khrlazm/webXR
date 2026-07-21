@@ -1032,8 +1032,11 @@ const fogGlow = clamp(float(1.0).sub(fogR), float(0.0), float(1.0));
 const fogSoft = fogGlow.mul(fogGlow);                      // soft radial falloff
 fogMat.colorNode   = vec3(FOG_COL.r, FOG_COL.g, FOG_COL.b).mul(fogSoft).mul(uFogStrength);
 fogMat.opacityNode = fogSoft;                             // additive; opacity shapes the edge
-fogMat.vertexNode  = billboarding({ position: positionLocal }); // face the camera from any orbit
-const fogMesh = new THREE.Mesh(new THREE.PlaneGeometry(7.6, 7.6), fogMat);
+// A FLAT horizontal glow lying in the ground plane under the disc — NOT a
+// camera-billboard (billboarding spun the card to face the viewer, so orbiting
+// read as "wrong rotation"). Laid flat, it's a fixed radial haze under the world.
+const fogMesh = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 9.0), fogMat);
+fogMesh.rotation.x = -Math.PI / 2;                        // lie flat in XZ
 fogMesh.position.set(0, -1.75, 0);                        // just below the skirt tip (TIP_Y -1.55)
 scene.add(fogMesh);
 
@@ -1108,14 +1111,15 @@ const bloomPass = bloom(sceneColor, /*strength*/ 0.70, /*radius*/ 0.60, /*thresh
 // silhouette. Unrolled in JS (plain node reassignment) — no Loop / no
 // .assign(), so it's rule-#4-safe at graph scope.
 const GR_SAMPLES  = 24;
-const GR_DECAY    = 0.92;   // per-step weight falloff
-const GR_THRESH   = 1.00;   // linear luma a pixel must exceed to streak
+const GR_DECAY    = 0.94;   // per-step weight falloff (higher = longer shafts)
+const GR_THRESH   = 0.85;   // linear luma a pixel must exceed to streak (grabs the sun glow, not just the core)
+const GR_EXPOSURE = 0.30;   // overall shaft brightness (NOT averaged by sample count — rays accumulate)
 const GR_TINT     = new THREE.Color(1.0, 0.86, 0.62);
 const uGodStrength = uniform(0.55);
 const uSunScreen   = uniform(new THREE.Vector2(0.5, 0.5)); // sun in screen-uv (CPU each frame)
 const uSunVis      = uniform(0.0);                          // 0 when sun off-screen / behind / set
 function buildGodRays() {
-  const here   = uv();
+  const here   = screenUV;                                   // fullscreen screen-uv (NOT uv() — that's a geometry attr)
   const stepUV = uSunScreen.sub(here).div(float(GR_SAMPLES)); // even march to the sun
   const lumaW  = vec3(0.2126, 0.7152, 0.0722);
   let acc = vec3(0.0);
@@ -1123,12 +1127,11 @@ function buildGodRays() {
   for (let i = 0; i < GR_SAMPLES; i++) {
     const s    = sceneColor.sample(here.add(stepUV.mul(i))).rgb;
     const luma = dot(s, lumaW);
-    const mask = smoothstep(float(GR_THRESH), float(GR_THRESH + 0.6), luma);
-    acc = acc.add(s.mul(mask).mul(w));
+    const mask = smoothstep(float(GR_THRESH), float(GR_THRESH + 0.5), luma);
+    acc = acc.add(s.mul(mask).mul(w));                        // ACCUMULATE (crepuscular rays add, they don't average)
     w *= GR_DECAY;
   }
-  acc = acc.div(float(GR_SAMPLES));
-  const rays = acc.mul(vec3(GR_TINT.r, GR_TINT.g, GR_TINT.b)).mul(uGodStrength).mul(uSunVis);
+  const rays = acc.mul(GR_EXPOSURE).mul(vec3(GR_TINT.r, GR_TINT.g, GR_TINT.b)).mul(uGodStrength).mul(uSunVis);
   return vec4(rays, 0.0); // vec4 (alpha 0) so the additive chain stays vec4-consistent
 }
 const godNode = buildGodRays();

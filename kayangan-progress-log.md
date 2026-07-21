@@ -298,7 +298,16 @@ sceneColor (LINEAR = scenePass.getTextureNode())
 
 **Both-backend note:** bloom/fxaa/renderOutput/PostProcessing all run on the WebGPURenderer WebGL2 backend (the bench already proved PostProcessing on both via §12); god-rays is plain multi-tap texture sampling → GLSL + WGSL. Verify on `?forcewebgl` anyway.
 
-## 16. Next session
+## 15a. Step 6 — DEVICE TEST 1 + FIXES (July 21, 2026)
+
+First on-device pass (WebGPU · HIGH, 60fps). **Confirmed working: selective bloom, fresnel rim glow, Quest-preset A/B.** Two defects found and fixed:
+
+1. **Under-disc fog — "wrong rotation."** It was a camera-`billboarding()` quad, so orbiting spun the card to face the viewer (read as a rotating vertical sheet, not a floor haze). **Fix:** removed billboarding; the fog is now a **flat horizontal plane** (`rotation.x = -π/2`, 9u) lying in the XZ ground plane at y −1.75. Fixed radial glow under the disc, view-independent — the disc body still occludes it (depthWrite off / depthTest on) so it reads as a halo below the rim.
+2. **God rays — invisible.** Two bugs: (a) sampled with `uv()`, which is a **geometry** attribute, not the fullscreen coordinate — in the post pass the march read the wrong place. **Fix:** use `screenUV`. (b) accumulation was divided by `GR_SAMPLES` (÷24), averaging away a single bright sun sample — crepuscular rays must **accumulate**, not average (GPU-Gems). **Fix:** dropped the ÷24, added `GR_EXPOSURE=0.30`; also `GR_THRESH 1.0→0.85` (grabs the sun's glow halo, not just the core) and `GR_DECAY 0.92→0.94` (longer shafts). Visibility gating (`uSunVis`: in-front × screen-edge × elevation) was already ≈1 at the 28° default sun, so it wasn't the culprit.
+
+Bench now **v6.1**. Re-test god rays at strength ~0.4–0.8 with the sun in frame; confirm the fog reads as a flat halo from low orbit angles.
+
+
 
 1. **Device-test Step 5 (§14 + §14a + §14b) first — still the priority**, independent of Step 6 (toggle post off-ish via the Quest preset while reading the falls). Desktop WebGPU renders at 60fps; check the twice-revised falls on Samsung A06 + Quest 2: (a) cluster + drift around the rim, no uniform ring; (b) full at boot, no warm-up; (c) sea slider grows/clusters live; (d) read as sheets/veils not a picket fence; (e) scattered hem; (f) fps at max config. `?forcewebgl` → falls should RENDER on WebGL2 (instanced quads, §14c). **If sheets read stiff → custom-vertexNode velocity-stretch (deferred lever).**
 2. **Device-test Step 6 (§15) — the new work.** Read for: (a) **sun glow + waterfall sheets bloom**, lit snow/terrain does NOT wash out (if it does → raise threshold, or go MRT selective); (b) **god rays** stream around the disc silhouette, fade correctly as the sun nears screen edge / sets / goes behind camera (no rays when `uSunVis`→0), no smear from bright water; (c) **rim glow** reads as a thin atmospheric limb on the disc edge, tracks the camera, doesn't over-glow the whole top; (d) **under-disc fog** sits as a faint halo below the rim, not a visible flat quad edge from low angles; (e) **Quest-preset A/B** — measure fps bloom-only vs full stack on A06 + Quest 2 at max water config; this is the number that decides what post Quest actually ships. Grade all five sliders against the concept art. Watch AgX grade parity direct-vs-refraction paths now that post is always-on.
@@ -307,7 +316,7 @@ sceneColor (LINEAR = scenePass.getTextureNode())
 
 **Risk register update:** #1 (depth parity → water) **RETIRED**. #2 (TSL compute on WebGL2 → waterfalls) — built + API-verified, **"verify on-device"**. #4 (bloom cost on Quest → Step 6) — **now live**: bloom is baseline/always-on; the Quest-preset toggle is built specifically to measure it. Mitigations staged: threshold-only bloom (no MRT), FXAA off on low, §11 resolution-governor still on the shelf.
 
-Bench file: `kayangan-bench.html` (v6.0, ~1410 lines) — Step 6 post + atmosphere: threshold bloom + custom radial god-rays + fresnel rim glow + under-disc fog + Quest-preset A/B, all through the §12 pass (`outputColorTransform=false` → single `renderOutput()` tone-map → display-space FXAA). Scene pass now always-on; direct path retired. Over Step 5 waterfalls (§14a–c) + Step 4 water + §12 refraction fix. Log + bench both in outputs / user's GitHub.
+Bench file: `kayangan-bench.html` (v6.1, ~1414 lines) — Step 6 post + atmosphere: threshold bloom + custom radial god-rays + fresnel rim glow + under-disc fog + Quest-preset A/B, all through the §12 pass (`outputColorTransform=false` → single `renderOutput()` tone-map → display-space FXAA). Scene pass now always-on; direct path retired. Over Step 5 waterfalls (§14a–c) + Step 4 water + §12 refraction fix. Log + bench both in outputs / user's GitHub.
 ---
 
 User's stated interests: procedural generation, environmental storytelling, symbolic world-building. Target hardware: Quest-class. Development so far is desktop-first single-file sketches in a folder served statically alongside index.html. User location context: Malaysia (hence *Kayangan*).
