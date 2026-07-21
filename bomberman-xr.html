@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>BOMB ARENA · WebXR</title>
+<style>
+  :root{
+    --bg:#0c0f14; --panel:#141a22; --ink:#e7e2d3; --dim:#8a94a3;
+    --fuse:#ff7a3c; --spark:#ffd24a; --grid:#1d2732;
+    --p0:#ff5d5d; --p1:#4ea3ff; --p2:#5fd08a; --p3:#e2c14a;
+    --edge:#26313d;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;user-select:none;touch-action:none}
+  canvas{display:block}
+  #app{position:fixed;inset:0}
+
+  /* ---- Menu ---- */
+  #menu{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 120% at 50% 0%,#141a24 0%,#0a0d12 70%);z-index:20}
+  .card{width:min(440px,92vw);background:linear-gradient(#161d27,#10151c);
+    border:1px solid var(--edge);border-radius:14px;padding:22px 22px 18px;
+    box-shadow:0 24px 60px rgba(0,0,0,.6)}
+  .brand{display:flex;align-items:baseline;gap:10px;margin:0 0 2px}
+  .brand b{font-size:26px;letter-spacing:2px}
+  .brand span{color:var(--fuse)}
+  .tag{color:var(--dim);font-size:11.5px;letter-spacing:.5px;margin:0 0 16px}
+  .row{display:flex;gap:8px;margin-top:10px}
+  button.act{flex:1;appearance:none;cursor:pointer;color:var(--ink);
+    background:#1b2531;border:1px solid var(--edge);border-radius:9px;
+    padding:12px 10px;font:inherit;font-size:13px;letter-spacing:.5px;transition:.12s}
+  button.act:hover{border-color:var(--fuse);background:#212d3b}
+  button.act:focus-visible{outline:2px solid var(--spark);outline-offset:2px}
+  button.primary{background:var(--fuse);border-color:var(--fuse);color:#160b06;font-weight:700}
+  button.primary:hover{background:#ff8a52}
+  .lbl{color:var(--dim);font-size:11px;letter-spacing:1px;margin:16px 0 6px;text-transform:uppercase}
+  .seg{display:flex;border:1px solid var(--edge);border-radius:9px;overflow:hidden}
+  .seg button{flex:1;background:#131a23;border:0;color:var(--dim);padding:9px 4px;font:inherit;font-size:12px;cursor:pointer}
+  .seg button.on{background:#202b38;color:var(--ink)}
+  input#code{width:100%;background:#0e141b;border:1px solid var(--edge);border-radius:9px;
+    color:var(--ink);font:inherit;font-size:16px;letter-spacing:3px;padding:11px;text-align:center;text-transform:uppercase}
+  .hint{color:var(--dim);font-size:10.5px;line-height:1.5;margin-top:14px}
+  .hint code{color:var(--spark)}
+  #err{color:#ff8a6a;font-size:11px;margin-top:8px;min-height:14px}
+
+  /* ---- HUD ---- */
+  #hud{position:fixed;top:0;left:0;right:0;z-index:10;pointer-events:none;
+    display:flex;justify-content:space-between;align-items:flex-start;padding:10px 12px;
+    font-size:12px}
+  #players{display:flex;gap:8px;flex-wrap:wrap}
+  .pchip{display:flex;align-items:center;gap:6px;background:rgba(16,22,30,.72);
+    border:1px solid var(--edge);border-radius:20px;padding:4px 9px 4px 6px}
+  .pdot{width:10px;height:10px;border-radius:50%}
+  .pchip.dead{opacity:.35;text-decoration:line-through}
+  .pchip small{color:var(--dim)}
+  #status{background:rgba(16,22,30,.72);border:1px solid var(--edge);border-radius:20px;
+    padding:5px 11px;pointer-events:auto}
+  #status b{color:var(--spark);letter-spacing:2px}
+  #banner{position:fixed;top:38%;left:0;right:0;text-align:center;z-index:11;pointer-events:none;
+    font-size:30px;letter-spacing:3px;text-shadow:0 3px 20px #000;opacity:0;transition:opacity .3s}
+  #banner.show{opacity:1}
+  #banner small{display:block;font-size:12px;color:var(--dim);letter-spacing:2px;margin-top:8px}
+
+  /* ---- touch controls ---- */
+  #touch{position:fixed;inset:0;z-index:9;display:none;pointer-events:none}
+  #touch.on{display:block}
+  #stick{position:absolute;left:22px;bottom:22px;width:140px;height:140px;border-radius:50%;
+    background:rgba(20,28,38,.5);border:1px solid var(--edge);pointer-events:auto;touch-action:none}
+  #nub{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;
+    background:rgba(120,150,180,.5);border:1px solid rgba(255,255,255,.25)}
+  #bombBtn{position:absolute;right:26px;bottom:40px;width:96px;height:96px;border-radius:50%;
+    background:radial-gradient(circle at 40% 35%,#ff8a52,#c23a12);border:2px solid #ffb27a;
+    color:#160b06;font:inherit;font-weight:800;font-size:15px;letter-spacing:1px;pointer-events:auto;
+    box-shadow:0 8px 24px rgba(200,60,20,.4)}
+  #bombBtn:active{transform:scale(.94)}
+  #topbtns{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:8px}
+  .mini{pointer-events:auto;background:rgba(16,22,30,.8);border:1px solid var(--edge);color:var(--ink);
+    border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .mini:hover{border-color:var(--fuse)}
+  #enterVR{display:none}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" style="display:none">
+  <div id="players"></div>
+  <div id="status"></div>
+</div>
+<div id="banner"></div>
+
+<div id="touch">
+  <div id="stick"><div id="nub"></div></div>
+  <button id="bombBtn">BOMB</button>
+</div>
+
+<div id="topbtns" style="display:none">
+  <button class="mini" id="btnRegen">Regenerate</button>
+  <button class="mini" id="enterVR">Enter VR</button>
+  <button class="mini" id="btnQuit">Quit</button>
+</div>
+
+<div id="menu">
+  <div class="card">
+    <p class="brand"><b>BOMB<span>·</span>ARENA</b></p>
+    <p class="tag">Cross-platform WebXR Bomberman — phone · desktop · Quest</p>
+
+    <div class="lbl">Players (local + bots)</div>
+    <div class="seg" id="segCount">
+      <button data-n="2">2</button><button data-n="3">3</button>
+      <button class="on" data-n="4">4</button>
+    </div>
+
+    <div class="lbl">Board</div>
+    <div class="seg" id="segSize">
+      <button data-s="s">Small</button>
+      <button class="on" data-s="m">Medium</button>
+      <button data-s="l">Large</button>
+    </div>
+
+    <div class="row"><button class="act primary" id="btnLocal">Play local (vs bots)</button></div>
+
+    <div class="lbl">Online (self-hosted)</div>
+    <div class="row">
+      <button class="act" id="btnHost">Host room</button>
+    </div>
+    <div class="row">
+      <input id="code" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false">
+      <button class="act" id="btnJoin" style="flex:0 0 40%">Join</button>
+    </div>
+    <div id="err"></div>
+
+    <div class="hint">
+      Move <code>WASD/arrows</code> · bomb <code>Space</code>. On phone, on-screen stick + BOMB.
+      In VR the arena is a table you look down on; <code>left stick</code> drives your piece,
+      <code>right trigger</code> drops a bomb. Online play needs the file served over
+      <code>https</code> (host it yourself); local + VR work offline.
+    </div>
+  </div>
+</div>
+
+<!-- r128: rock-solid UMD build, global THREE. PeerJS optional; game runs without it. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script>
+"use strict";
+/* =========================================================================
+   BOMB ARENA — device-agnostic multiplayer Bomberman (single file)
+   Architecture:
+     - Deterministic sim in tile-space (scale/camera independent)
+     - Intent layer: {mx,mz,bomb} from keyboard / touch / XR gamepad
+     - Embodiment: same boardGroup, re-framed per device (flat cam vs VR diorama)
+     - Netcode: host-authoritative full snapshots @15Hz over PeerJS; clients
+       predict own avatar + interpolate remotes. Board derived from shared seed.
+   ========================================================================= */
+
+/* ----------------------------- utilities ------------------------------- */
+const TAU = Math.PI*2;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const now=()=>performance.now()/1000;
+
+/* --------------------------- tile constants ---------------------------- */
+const FLOOR=0, SOLID=1, BRICK=2;
+const POW=['bomb','fire','speed'];              // powerup kinds
+const COLORS=[0xff5d5d,0x4ea3ff,0x5fd08a,0xe2c14a];
+const COLORS_CSS=['--p0','--p1','--p2','--p3'];
+
+/* ------------------------------ globals -------------------------------- */
+let renderer, scene, camera, boardGroup, clock;
+let W=13, H=11, SEED=1;
+let grid;                                        // Int8Array W*H
+let powunder;                                    // Map cell->powtype (revealed on break)
+let pickups;                                     // Map cell->powtype (on floor)
+let players=[], bombs=[], flames=[];
+let meshTiles={}, meshBricks={}, meshPickups={}, meshBombs=[], meshFlames=[], meshPlayers=[];
+let running=false, mode='menu', winner=-1, roundOver=false, roundEndAt=0;
+let localId=0, isHost=true, net=null;
+let flatCamRig;                                  // holds camera in flat mode
+let audio=null;
+
+const cfg={count:4,size:'m'};
+
+/* coordinate helpers (board centered on origin) */
+const OX=()=>(W-1)/2, OZ=()=>(H-1)/2;
+const cellIndex=(c,r)=>r*W+c;
+const inBounds=(c,r)=>c>=0&&c<W&&r>=0&&r<H;
+const tileAt=(c,r)=>inBounds(c,r)?grid[cellIndex(c,r)]:SOLID;
+const worldX=c=>c-OX(), worldZ=r=>r-OZ();
+const cellOf=(x,z)=>[Math.round(x+OX()),Math.round(z+OZ())];
+
+/* =========================================================================
+   PROCEDURAL LEVEL GENERATION
+   Classic checkerboard pillars (always leaves a connected corridor grid),
+   destructible bricks at density, guaranteed-clear L pockets at spawns,
+   powerups seeded under a fraction of bricks. Fully seed-reproducible so
+   every networked peer builds an identical board from a single integer.
+   ========================================================================= */
+const SIZES={s:[11,9,3],m:[13,11,4],l:[15,13,4]};
+function spawnCells(){                            // corner spawns for up to 4
+  return [[1,1],[W-2,1],[1,H-2],[W-2,H-2]];
+}
+function generate(seed){
+  SEED=seed>>>0;
+  const rnd=mulberry32(SEED);
+  grid=new Int8Array(W*H);
+  powunder=new Map();
+  pickups=new Map();
+  for(let r=0;r<H;r++)for(let c=0;c<W;c++){
+    let t=FLOOR;
+    if(c===0||r===0||c===W-1||r===H-1) t=SOLID;         // border
+    else if(c%2===0 && r%2===0) t=SOLID;                // pillars
+    grid[cellIndex(c,r)]=t;
+  }
+  // clear spawn L-pockets so nobody is boxed in
+  const safe=new Set();
+  for(const [sc,sr] of spawnCells()){
+    for(const [dc,dr] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){
+      const c=sc+dc, r=sr+dr;
+      if(inBounds(c,r)&&tileAt(c,r)!==SOLID){grid[cellIndex(c,r)]=FLOOR;safe.add(c+','+r);}
+    }
+  }
+  // scatter bricks + hidden powerups
+  const density=0.72;
+  for(let r=1;r<H-1;r++)for(let c=1;c<W-1;c++){
+    if(tileAt(c,r)!==FLOOR) continue;
+    if(safe.has(c+','+r)) continue;
+    if(rnd()<density){
+      grid[cellIndex(c,r)]=BRICK;
+      if(rnd()<0.28) powunder.set(cellIndex(c,r), POW[(rnd()*POW.length)|0]);
+    }
+  }
+}
+
+/* =========================================================================
+   ENTITY MODEL (sim)
+   ========================================================================= */
+function makePlayer(id,isBot){
+  const [c,r]=spawnCells()[id];
+  return {id,isBot:!!isBot,alive:true,
+    x:worldX(c),z:worldZ(r),
+    tc:c,tr:r,                                    // tile-movement target cell
+    maxBombs:1,range:2,speed:3.1,
+    active:0,                                    // live bombs placed
+    passBombs:new Set(),                         // bombs currently overlapped (walk off own)
+    mx:0,mz:0,bomb:false,bombEdge:false,
+    ai:{cool:0,target:null,repath:0,path:[]}};
+}
+
+/* --------------------------- collision --------------------------------- */
+function blockedCell(c,r,forPlayer){
+  const t=tileAt(c,r);
+  if(t===SOLID||t===BRICK) return true;
+  // bombs block, except ones the player is still standing on
+  for(const b of bombs){
+    if(b.c===c&&b.r===r){
+      if(forPlayer&&forPlayer.passBombs.has(b.id)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+const PR=0.28;                                   // player radius (smaller = more corridor clearance)
+const WALL=0.5;                                  // wall half-extent used for collision
+function circleHits(px,pz,pl){
+  const [cc,cr]=cellOf(px,pz);
+  for(let r=cr-1;r<=cr+1;r++)for(let c=cc-1;c<=cc+1;c++){
+    if(!blockedCell(c,r,pl)) continue;
+    const nx=clamp(px, worldX(c)-WALL, worldX(c)+WALL);
+    const nz=clamp(pz, worldZ(r)-WALL, worldZ(r)+WALL);
+    const dx=px-nx, dz=pz-nz;
+    if(dx*dx+dz*dz < PR*PR) return true;
+  }
+  return false;
+}
+// Can this player step into cell (c,r)? Floor only; bombs block except ones
+// the player is currently allowed to walk off (its own, freshly placed).
+function canEnter(pl,c,r){
+  if(tileAt(c,r)!==FLOOR) return false;
+  for(const b of bombs){ if(b.c===c&&b.r===r){ if(pl.passBombs.has(b.id)) continue; return false; } }
+  return true;
+}
+function movePlayer(pl,dt){
+  const sp=pl.speed*dt;
+  // desired cardinal direction (dominant axis wins; strictly one axis)
+  let dc=0,dr=0;
+  if(Math.abs(pl.mx)>=Math.abs(pl.mz)){ if(Math.abs(pl.mx)>0.2) dc=Math.sign(pl.mx); }
+  else { if(Math.abs(pl.mz)>0.2) dr=Math.sign(pl.mz); }
+
+  const tx=worldX(pl.tc), tz=worldZ(pl.tr);
+  const dx=tx-pl.x, dz=tz-pl.z;
+  const dist=Math.hypot(dx,dz);
+
+  if(dist<=sp){
+    // ---- arrived at the target cell centre: snap, then pick the next tile ----
+    pl.x=tx; pl.z=tz;
+    let budget=sp-dist;                            // leftover movement this frame
+    if(dc||dr){
+      const nc=pl.tc+dc, nr=pl.tr+dr;
+      if(canEnter(pl,nc,nr)){
+        pl.tc=nc; pl.tr=nr;
+        const step=Math.min(budget, 1);
+        pl.x+=dc*step; pl.z+=dr*step;              // roll leftover into the new tile
+      }
+    }
+  } else {
+    // ---- in transit: walk straight to the centre; allow an instant reverse ----
+    if(Math.abs(dx)>Math.abs(dz)){                 // travelling along x
+      const tdir=Math.sign(dx);
+      if(dc===-tdir&&dr===0) pl.tc-=tdir;          // pressed backwards → retarget the cell behind
+    } else {                                       // travelling along z
+      const tdir=Math.sign(dz);
+      if(dr===-tdir&&dc===0) pl.tr-=tdir;
+    }
+    const ex=worldX(pl.tc)-pl.x, ez=worldZ(pl.tr)-pl.z, ed=Math.hypot(ex,ez)||1;
+    const step=Math.min(sp,ed);
+    pl.x+=ex/ed*step; pl.z+=ez/ed*step;
+  }
+
+  // release pass-through only once fully clear of the bomb tile (not just the
+  // cell index) — otherwise the piece jams in the 0.5..0.5+PR dead zone.
+  for(const id of Array.from(pl.passBombs)){
+    const b=bombs.find(b=>b.id===id);
+    if(!b){pl.passBombs.delete(id);continue;}
+    const nx=clamp(pl.x, worldX(b.c)-0.5, worldX(b.c)+0.5);
+    const nz=clamp(pl.z, worldZ(b.r)-0.5, worldZ(b.r)+0.5);
+    const bx=pl.x-nx, bz=pl.z-nz;
+    if(bx*bx+bz*bz >= PR*PR) pl.passBombs.delete(id);
+  }
+  // pick up powerups
+  const [pc,pr]=cellOf(pl.x,pl.z);
+  const ci=cellIndex(pc,pr);
+  if(pickups.has(ci)){
+    const k=pickups.get(ci); pickups.delete(ci);
+    if(k==='bomb') pl.maxBombs++;
+    else if(k==='fire') pl.range++;
+    else pl.speed=Math.min(pl.speed+0.5,5.2);
+    sfx('pow');
+    removePickupMesh(ci);
+  }
+}
+
+/* ------------------------------ bombs ---------------------------------- */
+let bombSeq=0;
+function placeBomb(pl){
+  if(!pl.alive||pl.active>=pl.maxBombs) return;
+  const [c,r]=cellOf(pl.x,pl.z);
+  if(bombs.some(b=>b.c===c&&b.r===r)) return;
+  const b={id:++bombSeq,c,r,owner:pl.id,fuse:2.4,range:pl.range};
+  bombs.push(b);
+  pl.active++; pl.passBombs.add(b.id);
+  sfx('place');
+}
+function detonate(b){
+  const idx=bombs.indexOf(b); if(idx<0) return;
+  bombs.splice(idx,1);
+  const owner=players[b.owner]; if(owner) owner.active=Math.max(0,owner.active-1);
+  const cells=[[b.c,b.r]];
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(const [dc,dr] of dirs){
+    for(let k=1;k<=b.range;k++){
+      const c=b.c+dc*k, r=b.r+dr*k, t=tileAt(c,r);
+      if(t===SOLID) break;
+      cells.push([c,r]);
+      if(t===BRICK){ breakBrick(c,r); break; }
+    }
+  }
+  for(const [c,r] of cells){
+    flames.push({c,r,t:0.5});
+    // chain-detonate other bombs caught in the blast
+    const hit=bombs.find(x=>x.c===c&&x.r===r);
+    if(hit) detonate(hit);
+  }
+  spawnFlameMeshes(cells);
+  sfx('boom');
+}
+function breakBrick(c,r){
+  const ci=cellIndex(c,r);
+  grid[ci]=FLOOR;
+  removeBrickMesh(ci);
+  if(powunder.has(ci)){ pickups.set(ci, powunder.get(ci)); powunder.delete(ci); spawnPickupMesh(ci); }
+}
+
+/* --------------------------- danger map (bots) ------------------------- */
+function dangerSet(){
+  const d=new Set();
+  for(const b of bombs){
+    d.add(b.c+','+b.r);
+    for(const [dc,dr] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      for(let k=1;k<=b.range;k++){
+        const c=b.c+dc*k, r=b.r+dr*k, t=tileAt(c,r);
+        if(t===SOLID) break;
+        d.add(c+','+r);
+        if(t===BRICK) break;
+      }
+    }
+  }
+  for(const f of flames) d.add(f.c+','+f.r);
+  return d;
+}
+function bfs(sc,sr,goalFn,passFn){
+  const q=[[sc,sr]], seen=new Set([sc+','+sr]), prev=new Map();
+  while(q.length){
+    const [c,r]=q.shift();
+    if(goalFn(c,r)) { // rebuild path
+      const path=[]; let k=c+','+r;
+      while(prev.has(k)){ const [pc,pr]=k.split(',').map(Number); path.unshift([pc,pr]); k=prev.get(k); }
+      return path;
+    }
+    for(const [dc,dr] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nc=c+dc, nr=r+dr, key=nc+','+nr;
+      if(seen.has(key)||!inBounds(nc,nr)) continue;
+      if(!passFn(nc,nr)) continue;
+      seen.add(key); prev.set(key,c+','+r); q.push([nc,nr]);
+    }
+  }
+  return null;
+}
+function botThink(pl,dt){
+  pl.bombEdge=false;
+  const danger=dangerSet();
+  const [pc,pr]=cellOf(pl.x,pl.z);
+  const pass=(c,r)=>tileAt(c,r)===FLOOR && !bombs.some(b=>b.c===c&&b.r===r);
+  const safePass=(c,r)=>pass(c,r) && !danger.has(c+','+r);   // traversable AND not in a blast
+  // 1) flee if standing in danger — drop any stale plan so we don't drift back
+  if(danger.has(pc+','+pr)){
+    pl.ai.path=null;
+    const path=bfs(pc,pr,(c,r)=>!danger.has(c+','+r)&&pass(c,r),pass);
+    steerAlong(pl,path,pc,pr); return;
+  }
+  pl.ai.cool-=dt;
+  // 2) near a brick or enemy? bomb it if we have a safe escape
+  const adjBrick=[[1,0],[-1,0],[0,1],[0,-1]].some(([dc,dr])=>tileAt(pc+dc,pr+dr)===BRICK);
+  const enemyNear=players.some(o=>o.alive&&o.id!==pl.id&&Math.abs(o.x-pl.x)+Math.abs(o.z-pl.z)<1.6);
+  if((adjBrick||enemyNear)&&pl.active<pl.maxBombs&&pl.ai.cool<=0){
+    // simulate: would this bomb's blast trap us?
+    const future=new Set(danger);
+    for(const [dc,dr] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){
+      for(let k=0;k<=pl.range;k++){ const c=pc+dc*k,r=pr+dr*k,t=tileAt(c,r);
+        if(t===SOLID)break; future.add(c+','+r); if(t===BRICK)break; }
+    }
+    const escape=bfs(pc,pr,(c,r)=>!future.has(c+','+r)&&pass(c,r),pass);
+    if(escape&&escape.length){ pl.bombEdge=true; pl.ai.cool=1.1; pl.ai.path=escape; }
+  }
+  // 3) move: follow the escape plan (used the frame we bomb, before danger updates),
+  //    consuming it as we go; otherwise hunt the nearest brick WITHOUT crossing a blast.
+  if(pl.ai.path&&pl.ai.path.length){
+    steerAlong(pl,pl.ai.path,pc,pr);
+    if(!pl.ai.path.length) pl.ai.path=null;
+  } else {
+    pl.ai.path=null;
+    const path=bfs(pc,pr,(c,r)=>safePass(c,r)&&[[1,0],[-1,0],[0,1],[0,-1]].some(([dc,dr])=>tileAt(c+dc,r+dr)===BRICK),safePass);
+    steerAlong(pl,path,pc,pr);
+  }
+}
+function steerAlong(pl,path,pc,pr){
+  if(!path||!path.length){pl.mx=0;pl.mz=0;return;}
+  const [tc,tr]=path[0];
+  const tx=worldX(tc), tz=worldZ(tr);
+  let dx=tx-pl.x, dz=tz-pl.z;
+  const m=Math.hypot(dx,dz)||1;
+  pl.mx=dx/m; pl.mz=dz/m;
+  if(path.length>1&&Math.abs(dx)<0.08&&Math.abs(dz)<0.08) path.shift();
+}
+
+/* =========================================================================
+   RENDERING
+   ========================================================================= */
+let GEO={}, MAT={};
+function initThree(){
+  renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.75)); // cap for A06-class GPUs
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.xr.enabled=true;
+  renderer.setClearColor(0x0a0d12,1);
+  document.getElementById('app').appendChild(renderer.domElement);
+
+  scene=new THREE.Scene();
+  scene.fog=new THREE.Fog(0x0a0d12, 18, 34);
+
+  camera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,0.05,120);
+  flatCamRig=new THREE.Group(); flatCamRig.add(camera); scene.add(flatCamRig);
+
+  scene.add(new THREE.HemisphereLight(0xbfd4ff,0x20262e,0.9));
+  const dir=new THREE.DirectionalLight(0xffe6c0,0.75);
+  dir.position.set(4,9,3); scene.add(dir);
+
+  boardGroup=new THREE.Group(); scene.add(boardGroup);
+
+  // shared geometry/materials (cheap, mobile-friendly: Lambert, no shadow maps)
+  GEO.box=new THREE.BoxGeometry(0.94,0.94,0.94);
+  GEO.tall=new THREE.BoxGeometry(0.94,1.15,0.94);
+  GEO.bomb=new THREE.SphereGeometry(0.34,16,12);
+  GEO.flame=new THREE.BoxGeometry(0.98,0.7,0.98);
+  GEO.body=new THREE.CylinderGeometry(0.28,0.32,0.5,14); // no CapsuleGeometry in r128
+  GEO.head=new THREE.SphereGeometry(0.24,14,12);
+  GEO.pow=new THREE.OctahedronGeometry(0.26,0);
+  MAT.solid=new THREE.MeshLambertMaterial({color:0x39536b});
+  MAT.brick=new THREE.MeshLambertMaterial({color:0x9a5a34});
+  MAT.floor=new THREE.MeshLambertMaterial({color:0x141b22});
+  MAT.bomb=new THREE.MeshLambertMaterial({color:0x1a1d22});
+  MAT.flame=new THREE.MeshBasicMaterial({color:0xffb347,transparent:true,opacity:0.92});
+  MAT.pow=[new THREE.MeshLambertMaterial({color:0xff8a52,emissive:0x3a1400}),
+           new THREE.MeshLambertMaterial({color:0xff5d5d,emissive:0x3a0000}),
+           new THREE.MeshLambertMaterial({color:0x5fd08a,emissive:0x003316})];
+
+  window.addEventListener('resize',onResize);
+  clock=new THREE.Clock();
+  renderer.setAnimationLoop(loop);
+}
+function onResize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+
+function clearBoardMeshes(){
+  while(boardGroup.children.length) boardGroup.remove(boardGroup.children[0]);
+  meshBricks={}; meshPickups={}; meshBombs=[]; meshFlames=[]; meshPlayers=[];
+}
+function buildBoardMeshes(){
+  clearBoardMeshes();
+  // floor as one plane (1 draw call)
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(W,H),MAT.floor);
+  floor.rotation.x=-Math.PI/2; floor.position.y=-0.5; boardGroup.add(floor);
+  // grid lines for readability
+  const g=new THREE.GridHelper(Math.max(W,H),Math.max(W,H),0x203040,0x172029);
+  g.position.y=-0.49; boardGroup.add(g);
+  // solids via InstancedMesh (static, cheap)
+  const solidCells=[];
+  for(let r=0;r<H;r++)for(let c=0;c<W;c++) if(tileAt(c,r)===SOLID) solidCells.push([c,r]);
+  const inst=new THREE.InstancedMesh(GEO.tall,MAT.solid,solidCells.length);
+  const m=new THREE.Matrix4();
+  solidCells.forEach(([c,r],i)=>{m.makeTranslation(worldX(c),0.075,worldZ(r));inst.setMatrixAt(i,m);});
+  inst.instanceMatrix.needsUpdate=true; boardGroup.add(inst);
+  // bricks individually (destructible)
+  for(let r=0;r<H;r++)for(let c=0;c<W;c++) if(tileAt(c,r)===BRICK) spawnBrickMesh(cellIndex(c,r),c,r);
+  // any pre-existing pickups
+  pickups.forEach((k,ci)=>spawnPickupMesh(ci));
+  // player pieces
+  players.forEach(p=>{
+    const grp=new THREE.Group();
+    const col=COLORS[p.id];
+    const bodyMat=new THREE.MeshLambertMaterial({color:col});
+    const body=new THREE.Mesh(GEO.body,bodyMat); body.position.y=-0.15;
+    const head=new THREE.Mesh(GEO.head,bodyMat); head.position.y=0.24;
+    grp.add(body,head); boardGroup.add(grp); meshPlayers[p.id]=grp;
+  });
+}
+function spawnBrickMesh(ci,c,r){const mm=new THREE.Mesh(GEO.box,MAT.brick);mm.position.set(worldX(c),0,worldZ(r));boardGroup.add(mm);meshBricks[ci]=mm;}
+function removeBrickMesh(ci){if(meshBricks[ci]){boardGroup.remove(meshBricks[ci]);delete meshBricks[ci];}}
+function spawnPickupMesh(ci){const c=ci%W,r=(ci/W)|0;const k=pickups.get(ci);const mi=k==='bomb'?0:k==='fire'?1:2;
+  const mm=new THREE.Mesh(GEO.pow,MAT.pow[mi]);mm.position.set(worldX(c),-0.05,worldZ(r));mm.userData.spin=true;boardGroup.add(mm);meshPickups[ci]=mm;}
+function removePickupMesh(ci){if(meshPickups[ci]){boardGroup.remove(meshPickups[ci]);delete meshPickups[ci];}}
+function spawnFlameMeshes(cells){
+  for(const [c,r] of cells){
+    const mm=new THREE.Mesh(GEO.flame,MAT.flame.clone());
+    mm.position.set(worldX(c),0,worldZ(r));mm.userData.life=0.5;boardGroup.add(mm);meshFlames.push(mm);
+  }
+}
+function syncBombMeshes(){
+  // rebuild bomb meshes cheaply each frame (few bombs)
+  meshBombs.forEach(m=>boardGroup.remove(m)); meshBombs.length=0;
+  for(const b of bombs){
+    const mm=new THREE.Mesh(GEO.bomb,MAT.bomb);
+    const pulse=1+0.12*Math.sin(now()*10*(1+ (2.4-b.fuse)));
+    mm.scale.setScalar(pulse);
+    mm.position.set(worldX(b.c),-0.16,worldZ(b.r));boardGroup.add(mm);meshBombs.push(mm);
+  }
+}
+
+/* =========================================================================
+   INPUT / INTENT LAYER
+   ========================================================================= */
+const keys={};
+addEventListener('keydown',e=>{keys[e.code]=true; if(e.code==='Space')e.preventDefault();});
+addEventListener('keyup',e=>{keys[e.code]=false;});
+const touch={active:false,mx:0,mz:0,bomb:false};
+
+function readLocalIntent(){
+  let mx=0,mz=0,bomb=false;
+  if(keys['KeyA']||keys['ArrowLeft'])mx-=1;
+  if(keys['KeyD']||keys['ArrowRight'])mx+=1;
+  if(keys['KeyW']||keys['ArrowUp'])mz-=1;
+  if(keys['KeyS']||keys['ArrowDown'])mz+=1;
+  if(keys['Space'])bomb=true;
+  if(touch.active){mx+=touch.mx;mz+=touch.mz;}
+  if(touch.bomb){bomb=true;touch.bomb=false;}
+  // XR controller
+  if(renderer.xr.isPresenting){
+    const session=renderer.xr.getSession();
+    for(const src of session.inputSources){
+      if(!src.gamepad)continue;
+      const ax=src.gamepad.axes;
+      const sx=ax.length>2?ax[2]:ax[0], sy=ax.length>3?ax[3]:ax[1];
+      if(Math.hypot(sx,sy)>0.18){mx+=sx;mz+=sy;}
+      const trig=src.gamepad.buttons[0];
+      if(trig&&trig.pressed)bomb=true;
+    }
+  }
+  const m=Math.hypot(mx,mz); if(m>1){mx/=m;mz/=m;}
+  return {mx,mz,bomb};
+}
+
+/* touch stick setup */
+function setupTouch(){
+  const stick=document.getElementById('stick'), nub=document.getElementById('nub');
+  let id=null,cx=0,cy=0;
+  const R=54;
+  const set=(dx,dy)=>{const d=Math.hypot(dx,dy)||1;const cl=Math.min(d,R);const ux=dx/d*cl,uy=dy/d*cl;
+    nub.style.transform=`translate(${ux}px,${uy}px)`;touch.mx=ux/R;touch.mz=uy/R;};
+  stick.addEventListener('touchstart',e=>{e.preventDefault();const t=e.changedTouches[0];id=t.identifier;
+    const rr=stick.getBoundingClientRect();cx=rr.left+rr.width/2;cy=rr.top+rr.height/2;touch.active=true;set(t.clientX-cx,t.clientY-cy);},{passive:false});
+  stick.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches)if(t.identifier===id)set(t.clientX-cx,t.clientY-cy);},{passive:false});
+  const end=e=>{for(const t of e.changedTouches)if(t.identifier===id){id=null;touch.active=false;touch.mx=touch.mz=0;nub.style.transform='translate(0,0)';}};
+  stick.addEventListener('touchend',end);stick.addEventListener('touchcancel',end);
+  const bb=document.getElementById('bombBtn');
+  bb.addEventListener('touchstart',e=>{e.preventDefault();touch.bomb=true;},{passive:false});
+}
+
+/* =========================================================================
+   CAMERA / EMBODIMENT — flat vs VR diorama
+   ========================================================================= */
+function frameFlat(){
+  boardGroup.scale.setScalar(1); boardGroup.position.set(0,0,0);
+  const span=Math.max(W,H);
+  flatCamRig.position.set(0,0,0);
+  camera.position.set(0, span*0.80, span*0.54);
+  camera.lookAt(0,0,0.5);
+}
+function frameVR(){
+  // arena becomes a table diorama ~0.85m across, ~0.8m high, in front of you
+  const span=Math.max(W,H);
+  const s=0.85/span;
+  boardGroup.scale.setScalar(s);
+  boardGroup.position.set(0,0.78,-0.55);
+}
+function enterVR(){
+  if(!navigator.xr) return;
+  navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor']})
+    .then(s=>renderer.xr.setSession(s))
+    .catch(err=>flash('VR unavailable','serve over https on a headset'));
+}
+function bindXREvents(){
+  renderer.xr.addEventListener('sessionstart',frameVR);
+  renderer.xr.addEventListener('sessionend',()=>{frameFlat();});
+}
+
+/* =========================================================================
+   SIM STEP (host / local authority)
+   ========================================================================= */
+function stepSim(dt){
+  if(roundOver) return;
+  // apply intents
+  for(const pl of players){
+    if(!pl.alive)continue;
+    if(pl.isBot) botThink(pl,dt);
+    if(pl.bombEdge){ placeBomb(pl); pl.bombEdge=false; }
+    movePlayer(pl,dt);
+  }
+  // bombs
+  for(const b of bombs.slice()){ b.fuse-=dt; if(b.fuse<=0) detonate(b); }
+  // flames -> damage + expire
+  for(const f of flames.slice()){
+    f.t-=dt;
+    for(const pl of players){ if(!pl.alive)continue; const [pc,pr]=cellOf(pl.x,pl.z); if(pc===f.c&&pr===f.r) killPlayer(pl); }
+    if(f.t<=0) flames.splice(flames.indexOf(f),1);
+  }
+  // win check
+  const alive=players.filter(p=>p.alive);
+  if(!roundOver && alive.length<=1 && players.length>1){
+    roundOver=true; roundEndAt=now(); winner=alive.length? alive[0].id : -1;
+    announceWinner();
+  }
+}
+function killPlayer(pl){ if(!pl.alive)return; pl.alive=false; sfx('die'); if(pl.id===localId) flash('You were caught','—'); }
+
+/* =========================================================================
+   NETCODE — host-authoritative snapshots over PeerJS
+   ========================================================================= */
+function snapshot(){
+  return {t:'s',
+    p:players.map(p=>({i:p.id,x:+p.x.toFixed(3),z:+p.z.toFixed(3),a:p.alive?1:0,mb:p.maxBombs,rg:p.range})),
+    b:bombs.map(b=>({c:b.c,r:b.r,f:+b.fuse.toFixed(2)})),
+    f:flames.map(f=>({c:f.c,r:f.r})),
+    d:destroyedList(),                      // broken bricks (cells now floor that were brick)
+    k:[...pickups.entries()].map(([ci,kd])=>[ci,kd]),
+    ro:roundOver?1:0, w:winner };
+}
+let _knownBricks=null;
+function destroyedList(){
+  // cells that are floor now but were brick in the generated baseline
+  const out=[];
+  if(!_knownBricks){_knownBricks=new Set(); for(let i=0;i<grid.length;i++) if(grid[i]===BRICK)_knownBricks.add(i);}
+  for(const i of _knownBricks) if(grid[i]!==BRICK) out.push(i);
+  return out;
+}
+function applySnapshot(s){
+  // players
+  for(const ps of s.p){
+    let pl=players[ps.i]; if(!pl){pl=makePlayer(ps.i,false);players[ps.i]=pl;}
+    pl.alive=!!ps.a; pl.maxBombs=ps.mb; pl.range=ps.rg;
+    if(ps.i===localId){ // own avatar: reconcile toward authority
+      pl.netX=ps.x; pl.netZ=ps.z;
+    } else { // remote: interpolation buffer
+      pl.buf=pl.buf||[]; pl.buf.push({t:now(),x:ps.x,z:ps.z});
+      if(pl.buf.length>6)pl.buf.shift();
+    }
+  }
+  // destroyed bricks
+  for(const i of s.d){ if(grid[i]===BRICK){ grid[i]=FLOOR; removeBrickMesh(i);} }
+  // pickups
+  const cur=new Set(s.k.map(e=>e[0]));
+  s.k.forEach(([ci,kd])=>{ if(!pickups.has(ci)){pickups.set(ci,kd);spawnPickupMesh(ci);} });
+  for(const ci of Array.from(pickups.keys())) if(!cur.has(ci)){pickups.delete(ci);removePickupMesh(ci);}
+  // bombs / flames rebuilt from snapshot for clients
+  bombs=s.b.map((b,i)=>({id:i,c:b.c,r:b.r,fuse:b.f,range:2,owner:0}));
+  flames=s.f.map(f=>({c:f.c,r:f.r,t:0.3}));
+  roundOver=!!s.ro; winner=s.w;
+  if(roundOver) announceWinner();
+}
+
+function startHost(code){
+  if(typeof Peer==='undefined'){showErr('PeerJS not loaded (offline?). Use local play.');return;}
+  isHost=true; localId=0;
+  net={peer:null,conns:[],inputs:{}};
+  const id='bmbxr2-'+code;
+  net.peer=new Peer(id,{debug:1});
+  net.peer.on('open',()=>{ beginGame('host',[makePlayer(0,false)]); showRoom(code); });
+  net.peer.on('error',e=>{ showErr('Host error: '+e.type+' (code taken?)'); });
+  net.peer.on('connection',conn=>{
+    conn.on('open',()=>{
+      const pid=players.length; players.push(makePlayer(pid,false));
+      net.conns.push({conn,pid}); rebuildRoster();
+      conn.send({t:'init',seed:SEED,W,H,id:pid});
+    });
+    conn.on('data',d=>{ if(d.t==='in'){const e=net.conns.find(x=>x.conn===conn); if(e)net.inputs[e.pid]=d;} });
+    conn.on('close',()=>{ const e=net.conns.find(x=>x.conn===conn); if(e&&players[e.pid])players[e.pid].alive=false; });
+  });
+}
+function startJoin(code){
+  if(typeof Peer==='undefined'){showErr('PeerJS not loaded (offline?). Use local play.');return;}
+  isHost=false;
+  net={peer:new Peer(undefined,{debug:1}),conn:null};
+  net.peer.on('open',()=>{
+    const conn=net.peer.connect('bmbxr2-'+code,{reliable:false});
+    net.conn=conn;
+    conn.on('open',()=>{});
+    conn.on('data',d=>{
+      if(d.t==='init'){ localId=d.id; W=d.W;H=d.H; generate(d.seed);
+        players=[]; for(let i=0;i<=d.id;i++)players[i]=makePlayer(i,false);
+        beginGame('client',players); frameFlat(); }
+      else if(d.t==='s'){ applySnapshot(d); }
+    });
+    conn.on('close',()=>flash('Disconnected','host left'));
+    net.peer.on('error',()=>showErr('Join failed — check code / https.'));
+  });
+  net.peer.on('error',e=>showErr('Peer error: '+e.type));
+}
+let _lastSnap=0,_lastIn=0;
+function netTick(){
+  if(!net) return;
+  const tnow=now();
+  if(isHost){
+    // ingest client inputs
+    if(net.inputs) for(const pid in net.inputs){ const pl=players[pid]; const d=net.inputs[pid];
+      if(pl&&!pl.isBot){ pl.mx=d.mx;pl.mz=d.mz; if(d.b&&!pl._pb)pl.bombEdge=true; pl._pb=d.b; } }
+    if(tnow-_lastSnap>1/15){ _lastSnap=tnow; const s=snapshot();
+      net.conns.forEach(({conn})=>{try{conn.send(s);}catch(e){}}); }
+  } else if(net.conn&&net.conn.open){
+    if(tnow-_lastIn>1/20){ _lastIn=tnow; const it=readLocalIntent();
+      try{net.conn.send({t:'in',mx:it.mx,mz:it.mz,b:it.bomb});}catch(e){} }
+  }
+}
+
+/* =========================================================================
+   MAIN LOOP
+   ========================================================================= */
+function loop(){
+  const dt=Math.min(clock.getDelta(),0.05);
+  if(running){
+    if(mode==='client'){
+      // predict own avatar from local intent; reconcile toward authority
+      const me=players[localId];
+      if(me&&me.alive){ const it=readLocalIntent(); me.mx=it.mx;me.mz=it.mz; movePlayer(me,dt);
+        if(me.netX!==undefined){ me.x=lerp(me.x,me.netX,0.15); me.z=lerp(me.z,me.netZ,0.15);} }
+      // interpolate remotes from buffer
+      for(const p of players){ if(!p||p.id===localId||!p.buf||p.buf.length<2)continue;
+        const target=now()-0.12; let a=p.buf[0],b=p.buf[1];
+        for(let i=0;i<p.buf.length-1;i++){ if(p.buf[i].t<=target&&p.buf[i+1].t>=target){a=p.buf[i];b=p.buf[i+1];break;} }
+        const span=(b.t-a.t)||1, tt=clamp((target-a.t)/span,0,1);
+        p.x=lerp(a.x,b.x,tt); p.z=lerp(a.z,b.z,tt); }
+    } else {
+      // host or local authority: apply own intent then simulate everyone
+      const me=players[localId];
+      if(me&&me.alive){ const it=readLocalIntent(); me.mx=it.mx;me.mz=it.mz; if(it.bomb&&!me._pb)me.bombEdge=true; me._pb=it.bomb; }
+      stepSim(dt);
+    }
+    netTick();
+    updateEntityMeshes(dt);
+    updateHUD();
+    if(roundOver && now()-roundEndAt>3 && (mode!=='client')) resetRound();
+  }
+  renderer.render(scene,camera);
+}
+function updateEntityMeshes(dt){
+  players.forEach(p=>{ const g=meshPlayers[p.id]; if(!g)return;
+    g.visible=p.alive; g.position.set(p.x,0,p.z);
+    if(p.alive){const t=now()*6; g.children[0].position.y=-0.15+Math.abs(Math.sin(t))*0.04*(Math.hypot(p.mx,p.mz)>0.1?1:0);} });
+  syncBombMeshes();
+  // flames
+  for(const m of meshFlames.slice()){ m.userData.life-=dt; m.material.opacity=Math.max(0,m.userData.life/0.5)*0.92;
+    m.scale.y=0.6+m.userData.life; if(m.userData.life<=0){boardGroup.remove(m);meshFlames.splice(meshFlames.indexOf(m),1);} }
+  // spin pickups
+  boardGroup.children.forEach(ch=>{ if(ch.userData&&ch.userData.spin){ch.rotation.y+=dt*2;ch.position.y=-0.05+Math.sin(now()*3)*0.06;} });
+}
+
+/* =========================================================================
+   GAME LIFECYCLE
+   ========================================================================= */
+function beginGame(m,pls){
+  mode=m; players=pls; _knownBricks=null;
+  buildBoardMeshes(); frameFlat();
+  document.getElementById('menu').style.display='none';
+  document.getElementById('hud').style.display='flex';
+  document.getElementById('topbtns').style.display='flex';
+  const touchDev=('ontouchstart'in window)||navigator.maxTouchPoints>0;
+  document.getElementById('touch').classList.toggle('on',touchDev);
+  running=true; roundOver=false;
+}
+function startLocal(){
+  const [w,h]=SIZES[cfg.size]; W=w;H=h;
+  generate((Math.random()*1e9)|0);
+  const pls=[makePlayer(0,false)];
+  for(let i=1;i<cfg.count;i++) pls.push(makePlayer(i,true));
+  isHost=true; localId=0; net=null;
+  beginGame('local',pls);
+}
+function resetRound(){
+  if(mode==='client')return;
+  const seed=(Math.random()*1e9)|0;
+  generate(seed);
+  players.forEach((p,i)=>{ const sp=spawnCells()[i]; p.x=worldX(sp[0]);p.z=worldZ(sp[1]); p.tc=sp[0];p.tr=sp[1];
+    p.alive=true;p.active=0;p.maxBombs=1;p.range=2;p.speed=3.1;p.passBombs.clear();p.ai={cool:0,path:[]}; });
+  bombs=[];flames=[];roundOver=false;winner=-1; _knownBricks=null;
+  buildBoardMeshes();
+  if(isHost&&net) net.conns&&net.conns.forEach(({conn})=>{try{conn.send({t:'init',seed,W,H,id:0});}catch(e){}});
+  hideBanner();
+}
+function regenerate(){ if(mode!=='client') resetRound(); }
+function quitGame(){
+  running=false; mode='menu';
+  if(net&&net.peer)try{net.peer.destroy();}catch(e){} net=null;
+  if(renderer.xr.isPresenting){try{renderer.xr.getSession().end();}catch(e){}}
+  document.getElementById('menu').style.display='flex';
+  document.getElementById('hud').style.display='none';
+  document.getElementById('topbtns').style.display='none';
+  document.getElementById('touch').classList.remove('on');
+  hideBanner();
+}
+
+/* =========================================================================
+   HUD / UI
+   ========================================================================= */
+const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function rebuildRoster(){/* host roster refresh handled by updateHUD */}
+function updateHUD(){
+  const cont=document.getElementById('players'); 
+  cont.innerHTML='';
+  players.forEach(p=>{ if(!p)return;
+    const chip=document.createElement('div'); chip.className='pchip'+(p.alive?'':' dead');
+    const dot=document.createElement('span'); dot.className='pdot';
+    dot.style.background=cssVar(COLORS_CSS[p.id]);
+    const nm=document.createElement('span'); nm.textContent=(p.id===localId?'YOU':(p.isBot?'BOT':'P'+(p.id+1)));
+    const st=document.createElement('small'); st.textContent=` ✦${p.maxBombs} ⟶${p.range}`;
+    chip.append(dot,nm,st); cont.appendChild(chip);
+  });
+  const s=document.getElementById('status');
+  if(mode==='host') s.innerHTML='ROOM <b>'+(net&&net.peer?net.peer.id.replace('bmbxr2-',''):'—')+'</b>';
+  else if(mode==='client') s.textContent='ONLINE';
+  else s.textContent='LOCAL';
+}
+function announceWinner(){
+  const name = winner<0 ? 'DRAW' : (winner===localId?'YOU WIN':( players[winner]&&players[winner].isBot?'BOT '+(winner+1)+' WINS':'P'+(winner+1)+' WINS'));
+  flash(name, mode==='client'?'next round hosted by room owner':'new arena in 3…');
+}
+const banner=document.getElementById('banner');
+function flash(t,sub){ banner.innerHTML=t+(sub?'<small>'+sub+'</small>':''); banner.classList.add('show'); }
+function hideBanner(){ banner.classList.remove('show'); }
+function showRoom(code){ flash('ROOM '+code,'share the code · waiting for players'); setTimeout(hideBanner,2600); }
+function showErr(m){ document.getElementById('err').textContent=m; }
+
+/* =========================================================================
+   AUDIO (tiny procedural SFX)
+   ========================================================================= */
+function ac(){ if(!audio){try{audio=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}} return audio; }
+function sfx(kind){
+  const a=ac(); if(!a)return; const t=a.currentTime;
+  const o=a.createOscillator(), g=a.createGain(); o.connect(g); g.connect(a.destination);
+  if(kind==='place'){o.type='square';o.frequency.setValueAtTime(180,t);g.gain.setValueAtTime(0.08,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.12);o.start(t);o.stop(t+0.13);}
+  else if(kind==='boom'){o.type='sawtooth';o.frequency.setValueAtTime(90,t);o.frequency.exponentialRampToValueAtTime(30,t+0.35);g.gain.setValueAtTime(0.18,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.4);o.start(t);o.stop(t+0.42);}
+  else if(kind==='pow'){o.type='triangle';o.frequency.setValueAtTime(520,t);o.frequency.linearRampToValueAtTime(880,t+0.12);g.gain.setValueAtTime(0.1,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.16);o.start(t);o.stop(t+0.17);}
+  else if(kind==='die'){o.type='sawtooth';o.frequency.setValueAtTime(300,t);o.frequency.exponentialRampToValueAtTime(60,t+0.5);g.gain.setValueAtTime(0.14,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.5);o.start(t);o.stop(t+0.52);}
+}
+
+/* =========================================================================
+   MENU WIRING
+   ========================================================================= */
+function randCode(){const s='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let o='';for(let i=0;i<4;i++)o+=s[(Math.random()*s.length)|0];return o;}
+function wireMenu(){
+  document.querySelectorAll('#segCount button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#segCount button').forEach(x=>x.classList.remove('on'));b.classList.add('on');cfg.count=+b.dataset.n;});
+  document.querySelectorAll('#segSize button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#segSize button').forEach(x=>x.classList.remove('on'));b.classList.add('on');cfg.size=b.dataset.s;});
+  document.getElementById('btnLocal').onclick=()=>{ac();startLocal();};
+  document.getElementById('btnHost').onclick=()=>{ac();const [w,h]=SIZES[cfg.size];W=w;H=h;generate((Math.random()*1e9)|0);startHost(randCode());};
+  document.getElementById('btnJoin').onclick=()=>{ac();const c=document.getElementById('code').value.trim().toUpperCase();if(c.length<3){showErr('Enter a room code.');return;}startJoin(c);};
+  document.getElementById('btnRegen').onclick=regenerate;
+  document.getElementById('btnQuit').onclick=quitGame;
+  document.getElementById('enterVR').onclick=enterVR;
+}
+
+/* =========================================================================
+   BOOT
+   ========================================================================= */
+(function boot(){
+  initThree(); bindXREvents(); setupTouch(); wireMenu();
+  if(navigator.xr&&navigator.xr.isSessionSupported){
+    navigator.xr.isSessionSupported('immersive-vr').then(ok=>{ if(ok) document.getElementById('enterVR').style.display='inline-block'; }).catch(()=>{});
+  }
+})();
+</script>
+</body>
+</html>
