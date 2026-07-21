@@ -500,7 +500,7 @@ function initThree(){
   GEO.pow=new THREE.OctahedronGeometry(0.26,0);
   MAT.solid=new THREE.MeshLambertMaterial({color:0x39536b});
   MAT.brick=new THREE.MeshLambertMaterial({color:0x9a5a34});
-  MAT.floor=new THREE.MeshLambertMaterial({color:0x141b22});
+  MAT.floor=new THREE.MeshLambertMaterial({color:0x008631}); // soft sage: dark bombs read clearly
   MAT.bomb=new THREE.MeshLambertMaterial({color:0x1a1d22});
   MAT.flame=new THREE.MeshBasicMaterial({color:0xffb347,transparent:true,opacity:0.92});
   MAT.pow=[new THREE.MeshLambertMaterial({color:0xff8a52,emissive:0x3a1400}),
@@ -602,14 +602,17 @@ function buildBoardMeshes(){
   // any pre-existing pickups
   pickups.forEach((k,ci)=>spawnPickupMesh(ci));
   // player pieces
-  players.forEach(p=>{
-    const grp=new THREE.Group();
-    const col=COLORS[p.id];
-    const bodyMat=new THREE.MeshLambertMaterial({color:col});
-    const body=new THREE.Mesh(GEO.body,bodyMat); body.position.y=-0.15;
-    const head=new THREE.Mesh(GEO.head,bodyMat); head.position.y=0.24;
-    grp.add(body,head); boardGroup.add(grp); meshPlayers[p.id]=grp;
-  });
+  players.forEach(ensurePlayerMesh);
+}
+// Create a player's mesh if it doesn't exist yet. Called both at board build and
+// lazily every frame, so peers that join AFTER the board was built still appear.
+function ensurePlayerMesh(p){
+  if(!p||meshPlayers[p.id]) return;
+  const grp=new THREE.Group();
+  const bodyMat=new THREE.MeshLambertMaterial({color:COLORS[p.id%COLORS.length]});
+  const body=new THREE.Mesh(GEO.body,bodyMat); body.position.y=-0.15;
+  const head=new THREE.Mesh(GEO.head,bodyMat); head.position.y=0.24;
+  grp.add(body,head); boardGroup.add(grp); meshPlayers[p.id]=grp;
 }
 function spawnBrickMesh(ci,c,r){const mm=new THREE.Mesh(GEO.box,MAT.brick);mm.position.set(worldX(c),0,worldZ(r));boardGroup.add(mm);meshBricks[ci]=mm;}
 function removeBrickMesh(ci){if(meshBricks[ci]){boardGroup.remove(meshBricks[ci]);delete meshBricks[ci];}}
@@ -793,12 +796,20 @@ function applySnapshot(s){
   const cur=new Set(s.k.map(e=>e[0]));
   s.k.forEach(([ci,kd])=>{ if(!pickups.has(ci)){pickups.set(ci,kd);spawnPickupMesh(ci);} });
   for(const ci of Array.from(pickups.keys())) if(!cur.has(ci)){pickups.delete(ci);removePickupMesh(ci);}
-  // bombs / flames rebuilt from snapshot for clients
+  // bombs rebuilt from snapshot for clients
   bombs=s.b.map((b,i)=>({id:i,c:b.c,r:b.r,fuse:b.f,range:2,owner:0}));
+  // flames: spawn a mesh for each cell that JUST started burning (host only sends
+  // the current burning cells; without this, clients never see explosions)
+  const nowKeys=new Set(s.f.map(f=>f.c+','+f.r));
+  const fresh=s.f.filter(f=>!_prevFlameKeys.has(f.c+','+f.r));
+  if(fresh.length){ spawnFlameMeshes(fresh.map(f=>[f.c,f.r])); sfx('boom'); }
+  _prevFlameKeys=nowKeys;
   flames=s.f.map(f=>({c:f.c,r:f.r,t:0.3}));
   roundOver=!!s.ro; winner=s.w;
-  if(roundOver) announceWinner();
+  if(roundOver && !_announced){ _announced=true; announceWinner(); }
+  if(!roundOver) _announced=false;
 }
+let _prevFlameKeys=new Set(), _announced=false;
 
 function startHost(code){
   if(typeof Peer==='undefined'){showErr('PeerJS not loaded (offline?). Use local play.');return;}
@@ -886,7 +897,7 @@ function loop(){
 }
 let _vrUIt=0;
 function updateEntityMeshes(dt){
-  players.forEach(p=>{ const g=meshPlayers[p.id]; if(!g)return;
+  players.forEach(p=>{ if(!p)return; ensurePlayerMesh(p); const g=meshPlayers[p.id]; if(!g)return;
     g.visible=p.alive; g.position.set(p.x,0,p.z);
     if(p.alive){const t=now()*6; g.children[0].position.y=-0.15+Math.abs(Math.sin(t))*0.04*(Math.hypot(p.mx,p.mz)>0.1?1:0);} });
   syncBombMeshes();
