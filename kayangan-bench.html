@@ -177,8 +177,8 @@
     <input id="s-ex" type="range" min="0.2" max="2.5" step="0.05" value="1.0">
   </div>
   <div class="sub" style="margin:10px 0 8px">Step 6 · Post + Atmosphere</div>
-  <label class="check"><input id="c-quest" type="checkbox"> Quest preset (bloom only)</label>
-  <label class="check"><input id="c-god" type="checkbox" checked> God rays</label>
+  <label class="check"><input id="c-quest" type="checkbox"> Quest preset (lean post)</label>
+  <label class="check"><input id="c-music" type="checkbox"> Music (tintinnabuli)</label>
   <label class="check"><input id="c-fxaa" type="checkbox"> FXAA</label>
   <div class="row" id="r-bloom">
     <label>Bloom strength <span id="v-bloom">0.70</span></label>
@@ -188,9 +188,9 @@
     <label>Bloom threshold <span id="v-thr">1.30</span></label>
     <input id="s-thr" type="range" min="0" max="4" step="0.05" value="1.3">
   </div>
-  <div class="row" id="r-god">
-    <label>God rays <span id="v-god">0.55</span></label>
-    <input id="s-god" type="range" min="0" max="2" step="0.05" value="0.55">
+  <div class="row" id="r-punch">
+    <label>Punch (grade) <span id="v-punch">0.75</span></label>
+    <input id="s-punch" type="range" min="0" max="1.5" step="0.05" value="0.75">
   </div>
   <div class="row" id="r-rim">
     <label>Rim glow <span id="v-rim">0.50</span></label>
@@ -1072,7 +1072,7 @@ controls.target.set(0, 0, 0);
 const usesRefraction = () => waterOpts.depthFX && waterOpts.refraction;
 
 /* ============================================================
-   STEP 6 — POST STACK (bloom · god rays · FXAA · Quest preset)
+   STEP 6 — POST STACK (bloom · punchy grade · FXAA · Quest preset)
    All routed through the ONE scene pass() that already existed
    for refraction (§12). Bloom is now baseline on every tier
    (incl. Quest), so this pass is ALWAYS used — the cheaper
@@ -1082,8 +1082,8 @@ const usesRefraction = () => waterOpts.depthFX && waterOpts.refraction;
    by double tone-mapping twice — rule #2):
      sceneColor (LINEAR)
        + bloom(sceneColor)        ← linear, additive glow
-       + godRays(sceneColor)      ← linear, additive light shafts
        → renderOutput()           ← AgX + sRGB applied EXACTLY once
+       → graded()                 ← "punchy" look (sat/contrast), display space
        → fxaa()                   ← AA must run in display space
    outputColorTransform is turned OFF because renderOutput() now
    owns the single tone-map (pinned from the r180 bloom + fxaa
@@ -1103,47 +1103,31 @@ const sceneColor = scenePass.getTextureNode(); // linear HDR scene color
 // ---- bloom (params live as uniforms on the node; graded live below) ----
 const bloomPass = bloom(sceneColor, /*strength*/ 0.70, /*radius*/ 0.60, /*threshold*/ 1.30);
 
-// ---- god rays: radial blur toward the sun's screen position ----
-// GPU-Gems-style light scattering. March from each pixel toward the sun's
-// projected screen point, sampling the LINEAR scene color and keeping only
-// bright (sun / near-sun sky) energy, decaying per step. Where the dark disc
-// blocks the ray the samples read ~0, so the shafts stream AROUND the
-// silhouette. Unrolled in JS (plain node reassignment) — no Loop / no
-// .assign(), so it's rule-#4-safe at graph scope.
-const GR_SAMPLES  = 24;
-const GR_DECAY    = 0.94;   // per-step weight falloff (higher = longer shafts)
-const GR_THRESH   = 0.85;   // linear luma a pixel must exceed to streak (grabs the sun glow, not just the core)
-const GR_EXPOSURE = 0.30;   // overall shaft brightness (NOT averaged by sample count — rays accumulate)
-const GR_TINT     = new THREE.Color(1.0, 0.86, 0.62);
-const uGodStrength = uniform(0.55);
-const uSunScreen   = uniform(new THREE.Vector2(0.5, 0.5)); // sun in screen-uv (CPU each frame)
-const uSunVis      = uniform(0.0);                          // 0 when sun off-screen / behind / set
-function buildGodRays() {
-  const here   = screenUV;                                   // fullscreen screen-uv (NOT uv() — that's a geometry attr)
-  const stepUV = uSunScreen.sub(here).div(float(GR_SAMPLES)); // even march to the sun
-  const lumaW  = vec3(0.2126, 0.7152, 0.0722);
-  let acc = vec3(0.0);
-  let w = 1.0;
-  for (let i = 0; i < GR_SAMPLES; i++) {
-    const s    = sceneColor.sample(here.add(stepUV.mul(i))).rgb;
-    const luma = dot(s, lumaW);
-    const mask = smoothstep(float(GR_THRESH), float(GR_THRESH + 0.5), luma);
-    acc = acc.add(s.mul(mask).mul(w));                        // ACCUMULATE (crepuscular rays add, they don't average)
-    w *= GR_DECAY;
-  }
-  const rays = acc.mul(GR_EXPOSURE).mul(vec3(GR_TINT.r, GR_TINT.g, GR_TINT.b)).mul(uGodStrength).mul(uSunVis);
-  return vec4(rays, 0.0); // vec4 (alpha 0) so the additive chain stays vec4-consistent
+// ---- "Punchy" look grade (display space, applied AFTER tone-map) ----
+// The sacred-minimalist scene wants a bold, saturated read. One uPunch knob
+// drives saturation + contrast + a touch of gain, from neutral (0) → punchy (1).
+// Cheap (a few ALU ops), so it stays on even in the Quest preset.
+const uPunch = uniform(0.75);
+function graded(cNode) {
+  const c    = cNode.rgb;
+  const lum  = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  const sat  = float(1.0).add(uPunch.mul(0.38));   // saturation up to +38%
+  const con  = float(1.0).add(uPunch.mul(0.24));   // contrast up to +24% (around mid grey)
+  const gain = float(1.0).add(uPunch.mul(0.06));   // slight overall lift
+  let g = mix(vec3(lum), c, sat);                  // saturate around luma
+  g = mix(vec3(0.5), g, con);                      // contrast around 0.5
+  g = g.mul(gain);
+  return vec4(clamp(g, 0.0, 1.0), cNode.a);
 }
-const godNode = buildGodRays();
 
 // ---- effect flags + graph (re)composition ----
-const postOpts = { godrays: true, fxaa: TIER.antialias, rim: 0.5, fog: 0.5, quest: false };
+const postOpts = { fxaa: TIER.antialias, rim: 0.5, fog: 0.5, quest: false };
 
 function rebuildPost() {
-  let linear = sceneColor.add(bloomPass);                       // bloom = baseline (Quest keeps it)
-  if (!postOpts.quest && postOpts.godrays) linear = linear.add(godNode);
-  let out = renderOutput(linear);                               // AgX + sRGB, once
-  if (!postOpts.quest && postOpts.fxaa)    out = fxaa(out);     // AA in display space
+  const linear = sceneColor.add(bloomPass);                    // bloom = baseline (Quest keeps it)
+  let out = renderOutput(linear);                              // AgX + sRGB, once
+  out = graded(out);                                           // "punchy" look — always on (cheap; Quest keeps it)
+  if (!postOpts.quest && postOpts.fxaa) out = fxaa(out);       // AA in display space, last
   postFX.outputNode = out;
 }
 
@@ -1157,22 +1141,6 @@ function applyPostGating() {
 }
 rebuildPost();
 applyPostGating();
-
-// ---- sun screen-space position + visibility for the god rays (CPU/frame) ----
-const _sunPoint = new THREE.Vector3();
-const _camFwd   = new THREE.Vector3();
-function updateSunScreen() {
-  camera.getWorldDirection(_camFwd);
-  const facing = _camFwd.dot(uSunDir.value);                   // >0 = sun in front hemisphere
-  _sunPoint.copy(uSunDir.value).multiplyScalar(100).add(camera.position);
-  _sunPoint.project(camera);                                   // -> NDC
-  uSunScreen.value.set(_sunPoint.x * 0.5 + 0.5, _sunPoint.y * 0.5 + 0.5);
-  const inFront = facing > 0.05 ? 1 : 0;
-  const mx   = Math.max(Math.abs(_sunPoint.x), Math.abs(_sunPoint.y));
-  const edge = 1 - THREE.MathUtils.smoothstep(mx, 0.8, 1.35);  // fade as sun nears/leaves screen
-  const elev = THREE.MathUtils.smoothstep(uSunDir.value.y, -0.05, 0.15); // fade as sun sets
-  uSunVis.value = inFront * edge * elev;
-}
 
 /* ============================================================
    UI WIRING
@@ -1285,17 +1253,122 @@ els.cDepth.addEventListener('change', () => {
 const cWaterfall = document.getElementById('c-waterfall');
 cWaterfall.addEventListener('change', () => { waterfall.object.visible = cWaterfall.checked; });
 
+/* ============================================================
+   MYSTICAL MUSIC — generative "tintinnabuli" (ORIGINAL)
+   Arvo Pärt's tintinnabuli is a *technique*, not a piece: a
+   stepwise melodic voice (M-voice) shadowed by a voice that only
+   ever sounds notes of the tonic triad (T-voice). This is an
+   original generative realisation of that idea — no existing
+   composition is reproduced. Slow, bell-like, sacred; A minor
+   with a root+fifth drone. Pure Web Audio (no deps / no audio
+   files — the reverb impulse is synthesised). Starts on the
+   Music checkbox, which supplies the required user gesture.
+   ============================================================ */
+const Music = (() => {
+  const KEY   = 57;                 // A3 tonic (MIDI)
+  const SCALE = [0, 2, 3, 5, 7, 8, 10]; // natural minor (Aeolian)
+  const TRIAD = [0, 3, 7];          // tonic minor triad (A, C, E)
+  const midi  = (deg) => {          // scale degree (may exceed an octave) -> MIDI
+    const oct = Math.floor(deg / SCALE.length);
+    const idx = ((deg % SCALE.length) + SCALE.length) % SCALE.length;
+    return KEY + oct * 12 + SCALE[idx];
+  };
+  const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  // T-voice: nearest tonic-triad pitch at/above the M-voice note (1st position, superior)
+  const tVoice = (m) => {
+    for (let k = 0; k < 24; k++)
+      if (TRIAD.includes((((m + k) - KEY) % 12 + 12) % 12)) return m + k;
+    return m;
+  };
+
+  let ctx = null, master = null, verb = null, lp = null, drone = [], timer = null, deg = 7, running = false;
+
+  function makeIR(seconds, decay) {          // synthesised hall impulse (no external file)
+    const rate = ctx.sampleRate, len = Math.floor(rate * seconds);
+    const buf = ctx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+
+  function voice(m, when, dur, peak, type, detune) {
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.value = hz(m); o.detune.value = detune || 0;
+    const g = ctx.createGain();
+    const a = 0.9, r = Math.min(3.5, dur * 0.8); // slow attack, long release
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(peak, when + a);
+    g.gain.setValueAtTime(peak, when + Math.max(a, dur - r));
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    o.connect(g); g.connect(lp); g.connect(verb);  // dry + wet
+    o.start(when); o.stop(when + dur + 0.05);
+  }
+
+  function schedule() {
+    const now = ctx.currentTime;
+    const dur = 3.2 + Math.random() * 2.2;         // long, meditative
+    const m   = midi(deg);
+    voice(m,         now, dur, 0.16, 'triangle', 0);  // M-voice
+    voice(m,         now, dur, 0.05, 'sine',    +6);  // faint shimmer partial
+    voice(tVoice(m), now, dur, 0.11, 'sine',     0);  // T-voice (triad bell)
+    const step = (Math.random() < 0.72) ? (Math.random() < 0.5 ? -1 : 1)
+                                        : (Math.random() < 0.5 ? -2 : 2); // mostly stepwise
+    deg += step;
+    if (deg > 15) deg -= 4;
+    if (deg < 2)  deg += 4;
+    timer = setTimeout(schedule, dur * (0.55 + Math.random() * 0.25) * 1000); // overlap tails
+  }
+
+  function start() {
+    if (running) return; running = true;
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.resume) ctx.resume();
+    master = ctx.createGain(); master.gain.value = 0.0001;
+    lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3600; lp.Q.value = 0.4;
+    verb = ctx.createConvolver(); verb.buffer = makeIR(4.5, 3.0);
+    const verbGain = ctx.createGain(); verbGain.gain.value = 0.9;
+    lp.connect(master); verb.connect(verbGain); verbGain.connect(master); master.connect(ctx.destination);
+    master.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 4); // gentle fade-in
+    [45, 52].forEach((dm, i) => {                  // sustained drone: A2 root + E3 fifth
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz(dm);
+      const g = ctx.createGain(); g.gain.value = i === 0 ? 0.05 : 0.035;
+      o.connect(g); g.connect(lp); g.connect(verb); o.start(); drone.push(o);
+    });
+    schedule();
+  }
+
+  function stop() {
+    if (!running) return; running = false;
+    if (timer) clearTimeout(timer);
+    if (ctx) {
+      const t = ctx.currentTime;
+      try {
+        master.gain.cancelScheduledValues(t);
+        master.gain.setValueAtTime(master.gain.value, t);
+        master.gain.exponentialRampToValueAtTime(0.0001, t + 2.5);
+      } catch (e) {}
+      drone.forEach(o => { try { o.stop(t + 2.6); } catch (e) {} });
+      const dead = ctx;
+      setTimeout(() => { try { dead.close(); } catch (e) {} }, 3000);
+      ctx = null; drone = [];
+    }
+  }
+  return { start, stop };
+})();
+
 // ---- Step 6: post + atmosphere wiring ----
 const p6 = {
   quest: document.getElementById('c-quest'),
-  god:   document.getElementById('c-god'),   fxaa:  document.getElementById('c-fxaa'),
+  music: document.getElementById('c-music'), fxaa:  document.getElementById('c-fxaa'),
   bloom: document.getElementById('s-bloom'), vBloom: document.getElementById('v-bloom'),
   thr:   document.getElementById('s-thr'),   vThr:  document.getElementById('v-thr'),
-  gods:  document.getElementById('s-god'),   vGod:  document.getElementById('v-god'),
+  punch: document.getElementById('s-punch'), vPunch: document.getElementById('v-punch'),
   rim:   document.getElementById('s-rim'),   vRim:  document.getElementById('v-rim'),
   fog:   document.getElementById('s-fog'),   vFog:  document.getElementById('v-fog'),
   rBloom: document.getElementById('r-bloom'), rThr: document.getElementById('r-thr'),
-  rGod: document.getElementById('r-god'), rRim: document.getElementById('r-rim'), rFog: document.getElementById('r-fog'),
+  rPunch: document.getElementById('r-punch'), rRim: document.getElementById('r-rim'), rFog: document.getElementById('r-fog'),
 };
 p6.fxaa.checked = postOpts.fxaa; // default AA follows the tier (off on low)
 
@@ -1306,25 +1379,28 @@ const bindP6 = (input, label, digits, set) => {
 };
 bindP6(p6.bloom, p6.vBloom, 2, v => { bloomPass.strength.value = v; });
 bindP6(p6.thr,   p6.vThr,   2, v => { bloomPass.threshold.value = v; });
-bindP6(p6.gods,  p6.vGod,   2, v => { uGodStrength.value = v; });
+bindP6(p6.punch, p6.vPunch, 2, v => { uPunch.value = v; });          // grade intensity, live
 bindP6(p6.rim,   p6.vRim,   2, v => { postOpts.rim = v; applyPostGating(); });
 bindP6(p6.fog,   p6.vFog,   2, v => { postOpts.fog = v; applyPostGating(); });
 
-// structural toggles (recompose the post graph)
-p6.god.addEventListener('change',  () => { postOpts.godrays = p6.god.checked;  rebuildPost(); });
-p6.fxaa.addEventListener('change', () => { postOpts.fxaa    = p6.fxaa.checked; rebuildPost(); });
+// structural toggle (recompose the post graph)
+p6.fxaa.addEventListener('change', () => { postOpts.fxaa = p6.fxaa.checked; rebuildPost(); });
 
-// Quest preset: strip everything but tone-map + bloom, live, for an honest
-// desktop A/B of "what Quest ships" vs the full desktop post stack.
+// Music toggle — starts/stops the generative tintinnabuli engine (audio needs a
+// user gesture, which the checkbox click provides).
+p6.music.addEventListener('change', () => { p6.music.checked ? Music.start() : Music.stop(); });
+
+// Quest preset: lean post (tone-map + bloom + grade), FXAA off, rim + fog gated —
+// an honest desktop A/B of "what Quest ships" vs the full desktop stack.
 function reflectPreset() {
   const on = postOpts.quest;
-  [p6.rGod, p6.rRim, p6.rFog].forEach(r => r.classList.toggle('dim', on));
-  p6.god.disabled = on; p6.fxaa.disabled = on;
+  [p6.rRim, p6.rFog].forEach(r => r.classList.toggle('dim', on));
+  p6.fxaa.disabled = on;
 }
 p6.quest.addEventListener('change', () => {
   postOpts.quest = p6.quest.checked;
   applyPostGating();   // kill rim + fog uniforms/mesh
-  rebuildPost();       // drop god rays + fxaa from the graph
+  rebuildPost();       // drop fxaa from the graph
   reflectPreset();
 });
 reflectPreset();
@@ -1387,7 +1463,6 @@ renderer.setAnimationLoop(() => {
   }
 
   controls.update();
-  updateSunScreen();            // Step 6: project the sun to screen-uv for god rays
   // Step 6: bloom is baseline on every tier, so the scene pass is always used.
   // Water refraction still samples this pass's LINEAR buffer; renderOutput()
   // applies AgX exactly once at the tail (§16). The old direct render() path
