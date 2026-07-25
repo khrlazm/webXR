@@ -39,6 +39,24 @@ scroll to zoom; in a headset, press **Enter VR**.
 > non-localhost origins). Put this behind a TLS reverse proxy, use a tunnel such as
 > `ngrok http 8080`, or run it on `localhost` directly on the headset's browser.
 
+## Deploy (Render)
+
+A [`render.yaml`](../render.yaml) blueprint at the repo root deploys this as a web
+service. The server binds `process.env.PORT` and serves both the client and the
+WebSocket endpoint on the same origin, and the client auto-selects `wss://` over
+HTTPS — so a hosted deploy works with no code changes and gives you a real, shareable
+live link (HTTPS, which VR headsets require).
+
+1. Push this repo to GitHub (already done: `khrlazm/webXR`).
+2. In [Render](https://dashboard.render.com/) → **New + → Blueprint** → connect the
+   `khrlazm/webXR` repo. Render reads `render.yaml`, builds from the `fowl-play/`
+   subfolder, and deploys.
+3. Open the resulting `https://<name>.onrender.com` URL — the fight and multiplayer
+   spectating run there.
+
+> The free instance sleeps after ~15 min idle and takes ~30s to wake on the next
+> visit; upgrade the plan in `render.yaml` (`plan: starter`) to keep it always on.
+
 ## How it fits together
 
 | File | Role |

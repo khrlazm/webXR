@@ -1,0 +1,17 @@
+# Render Blueprint — deploys the Fowl Play server as a web service.
+# In Render: New + → Blueprint → pick the khrlazm/webXR repo. Render reads this
+# file, builds from the fowl-play/ subfolder, and gives you an HTTPS URL that
+# serves the client and the WebSocket multiplayer over the same origin.
+services:
+  - type: web
+    name: fowl-play
+    runtime: node
+    plan: free            # free tier supports WebSockets; instance sleeps after ~15 min idle
+    rootDir: fowl-play     # the Node app lives in this subdirectory of the repo
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true       # redeploys automatically on push to the default branch
+    envVars:
+      - key: NODE_VERSION
+        value: 20.9.0
