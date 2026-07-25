@@ -22,9 +22,15 @@ const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerH
 camera.position.set(0, 1.7, 4.8);
 
 // A rig so we can position the player (and their camera) as a whole in VR.
+// In VR the headset's tracking origin lands wherever this rig sits, so we park
+// it at a spectator spot just outside the ring (ring radius 2.6) rather than at
+// the world origin, which is the center of the pit.
 const playerRig = new THREE.Group();
 playerRig.add(camera);
 scene.add(playerRig);
+
+// spectator standing position for VR: behind the rail, facing the pit (-z)
+const VR_SPAWN = new THREE.Vector3(0, 0, 3.8);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.6, 0);
@@ -643,7 +649,20 @@ document.getElementById('enterBtn').addEventListener('click', () => {
 });
 
 // keep audio alive when entering/leaving VR
-renderer.xr.addEventListener('sessionstart', () => sound && sound.resume());
+// On entering VR, place the rig at the spectator spot outside the ring (with a
+// 'local-floor' reference space the headset supplies real height, so keep y at
+// the floor). On exit, reset it so OrbitControls' desktop camera is correct again.
+renderer.xr.addEventListener('sessionstart', () => {
+  if (sound) sound.resume();
+  playerRig.position.copy(VR_SPAWN);
+  playerRig.rotation.set(0, 0, 0);
+  playerRig.updateMatrixWorld(true);
+});
+renderer.xr.addEventListener('sessionend', () => {
+  playerRig.position.set(0, 0, 0);
+  playerRig.rotation.set(0, 0, 0);
+  playerRig.updateMatrixWorld(true);
+});
 
 // mute toggle
 const muteBtn = document.getElementById('muteBtn');
