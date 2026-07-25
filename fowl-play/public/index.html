@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Fowl Play — VR Cockfight</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐓</text></svg>" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <div id="title">🐓 FOWL PLAY <span>VR Cockfight Arena</span></div>
+    <div id="scoreboard">
+      <div class="fighter" id="fighter-0">
+        <span class="fname">Rojo</span>
+        <div class="bar"><i></i></div>
+      </div>
+      <div id="phase">Connecting…</div>
+      <div class="fighter" id="fighter-1">
+        <span class="fname">Azul</span>
+        <div class="bar"><i></i></div>
+      </div>
+    </div>
+    <div id="footer">
+      <span id="crowd">👥 0 watching</span>
+      <button id="muteBtn" title="Toggle sound">🔊</button>
+      <span id="conn">●</span>
+    </div>
+  </div>
+  <div id="overlay">
+    <div class="card">
+      <h1>🐓 Fowl Play</h1>
+      <p>A WebXR VR cockfight simulation with live multiplayer spectators.
+         The match is running on the server — everyone watching sees the same fight,
+         and you'll see other spectators around the pit.</p>
+      <label>Your name <input id="nameInput" maxlength="20" placeholder="Spectator" /></label>
+      <button id="enterBtn">Enter Arena</button>
+      <small>Desktop: drag to look, scroll to zoom. VR: click the "Enter VR" button.</small>
+    </div>
+  </div>
+  <div id="vr-slot"></div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

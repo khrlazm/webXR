@@ -1,0 +1,158 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --red: #e04a4a;
+  --blue: #4a7ce0;
+  --bg: #0d0f18;
+  --panel: rgba(16, 19, 32, 0.82);
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #f2f4ff;
+}
+
+canvas { display: block; }
+
+/* ---------- HUD ---------- */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  z-index: 10;
+}
+
+#title {
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.6);
+}
+#title span {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.7;
+  letter-spacing: 2px;
+}
+
+#scoreboard {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 12px 20px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+}
+.fighter { width: 190px; }
+#fighter-1 { text-align: right; }
+.fname { font-weight: 700; font-size: 15px; }
+.bar {
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.12);
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  border-radius: 6px;
+  transition: width 0.15s linear;
+}
+#fighter-0 .bar i { background: linear-gradient(90deg, #ff7a7a, var(--red)); }
+#fighter-1 .bar i { background: linear-gradient(90deg, var(--blue), #7aa5ff); }
+
+#phase {
+  min-width: 130px;
+  text-align: center;
+  font-weight: 800;
+  font-size: 17px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #ffd76a;
+}
+
+#footer {
+  align-self: center;
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  background: var(--panel);
+  border-radius: 20px;
+  padding: 6px 16px;
+}
+#conn { color: #ff5555; }
+#conn.ok { color: #4ade80; }
+
+#muteBtn {
+  pointer-events: auto;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+/* ---------- Entry overlay ---------- */
+#overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #1a1f38, #06070d);
+}
+.card {
+  width: min(460px, 90vw);
+  background: var(--panel);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 20px;
+  padding: 32px;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+.card h1 { font-size: 32px; margin-bottom: 12px; }
+.card p { font-size: 14px; line-height: 1.6; opacity: 0.85; margin-bottom: 20px; }
+.card label { display: block; text-align: left; font-size: 13px; opacity: 0.8; margin-bottom: 18px; }
+.card input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(0,0,0,0.3);
+  color: #fff;
+  font-size: 15px;
+}
+.card button {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #e04a4a, #b83232);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.1s, filter 0.1s;
+}
+.card button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+.card small { display: block; margin-top: 16px; font-size: 11px; opacity: 0.55; line-height: 1.5; }
+
+/* VR button injected by three.js */
+#vr-slot { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 20; }

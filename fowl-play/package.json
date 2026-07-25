@@ -1,0 +1,13 @@
+{
+  "name": "fowl-play",
+  "version": "1.0.0",
+  "description": "Three.js WebXR VR cockfight simulation with multiplayer spectators",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
