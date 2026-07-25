@@ -1,0 +1,1668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MALACCA — Port of the Winds</title>
+<style>
+  :root{ --ink:#241509; --parchment:#f0dfc0; --gilt:#d9a441; }
+  html,body{margin:0;padding:0;overflow:hidden;background:#000;height:100%;
+    font-family:Georgia,'Iowan Old Style','Times New Roman',serif;}
+  #app{position:fixed;inset:0;} canvas{display:block;}
+
+  #card,#endcard{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 120% at 50% 20%, #3a2410 0%, #170d05 70%);
+    z-index:30;transition:opacity 1.2s ease;}
+  #card.hidden,#endcard.hidden{opacity:0;pointer-events:none;}
+  #endcard{background:radial-gradient(120% 120% at 50% 20%, #2a1020 0%, #0d0410 70%);}
+  .card-inner{max-width:600px;padding:44px 48px;text-align:center;color:var(--parchment);
+    border:1px solid #6b4a24;outline:1px solid #2c1b0b;outline-offset:6px;
+    background:#20130780;}
+  .eyebrow{letter-spacing:.42em;font-size:11px;color:var(--gilt);text-transform:uppercase;}
+  h1{margin:.35em 0 .1em;font-size:40px;font-weight:400;letter-spacing:.08em;}
+  h1 .yr{color:var(--gilt);}
+  .sub{font-style:italic;color:#c9ae83;margin-bottom:24px;font-size:15px;}
+  .rule{height:1px;background:linear-gradient(90deg,transparent,#6b4a24,transparent);margin:16px 0;}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;text-align:left;
+    font-size:13.5px;color:#d8c5a0;margin:0 auto 24px;max-width:400px;}
+  .keys b{color:var(--parchment);font-weight:400;border:1px solid #6b4a24;padding:1px 8px;
+    font-size:12px;letter-spacing:.06em;white-space:nowrap;text-align:center;}
+  .btnrow{display:flex;gap:14px;justify-content:center;}
+  button.enter{cursor:pointer;font-family:inherit;font-size:15px;letter-spacing:.14em;
+    color:var(--ink);background:var(--gilt);border:none;padding:12px 30px;text-transform:uppercase;}
+  button.enter:hover{background:#e8bc63;}
+  button.vr{background:transparent;color:var(--gilt);border:1px solid var(--gilt);}
+  button.vr:hover{background:#d9a44122;}
+  .foot{margin-top:20px;font-size:11px;color:#8a6f4d;letter-spacing:.08em;}
+  #endstats{font-size:15px;line-height:2;color:#d8c5a0;text-align:left;display:inline-block;margin:6px 0 4px;}
+  #endstats b{color:var(--gilt);font-weight:400;}
+
+  #hud{position:fixed;top:18px;left:18px;z-index:20;color:var(--parchment);
+    background:#1a0f05cc;border:1px solid #6b4a2488;padding:12px 16px;min-width:190px;
+    font-size:14px;line-height:1.55;display:none;}
+  #hud .gold{color:var(--gilt);font-size:18px;}
+  #hud small{color:#9c7f57;letter-spacing:.06em;}
+  #objective{position:fixed;top:18px;right:18px;z-index:20;color:#e6cf9f;display:none;
+    background:#1a0f05cc;border:1px solid #6b4a2488;padding:10px 14px;font-size:13px;
+    font-style:italic;max-width:280px;line-height:1.6;}
+  #objective .oh{font-style:normal;color:#9c7f57;font-size:10.5px;letter-spacing:.2em;}
+  #prompt{position:fixed;left:50%;bottom:14%;transform:translateX(-50%);z-index:20;
+    color:var(--parchment);background:#1a0f05d9;border:1px solid #d9a44166;
+    padding:8px 18px;font-size:14px;letter-spacing:.05em;display:none;}
+  #crosshair{position:fixed;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;
+    border-radius:50%;background:#f0dfc0aa;z-index:20;display:none;}
+  #toast{position:fixed;left:50%;bottom:22%;transform:translateX(-50%);z-index:21;
+    color:var(--gilt);font-style:italic;font-size:15px;text-shadow:0 1px 6px #000;
+    opacity:0;transition:opacity .4s;pointer-events:none;max-width:70vw;text-align:center;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="card">
+  <div class="card-inner">
+    <div class="eyebrow">Tali' Productions · vertical slice</div>
+    <h1>MALACCA <span class="yr">·</span> PORT OF THE WINDS</h1>
+    <div class="sub">“The world comes to Malacca.” — One morning as apprentice Syahbandar.</div>
+    <div class="rule"></div>
+    <div class="keys">
+      <b>W A S D</b><span>walk</span>
+      <b>Mouse / drag</b><span>look</span>
+      <b>E / Click</b><span>talk · inspect · stamp</span>
+      <b>Tab or B</b><span>open your ledger</span>
+      <b>VR</b><span>left stick — move · right stick — turn · trigger — interact · grip — ledger</span>
+    </div>
+    <div class="btnrow">
+      <button class="enter" id="btnStart">Begin the morning</button>
+      <button class="enter vr" id="btnVR" style="display:none">Enter VR</button>
+    </div>
+    <div class="foot">THREE SHIPS RIDE AT ANCHOR · PROCESS THEM ALL · THE HARBOR CLOSES AT SUNSET</div>
+  </div>
+</div>
+
+<div id="endcard" class="hidden">
+  <div class="card-inner">
+    <div class="eyebrow">the harbor closes</div>
+    <h1>MAGHRIB</h1>
+    <div class="sub">The beduk sounds from the hill. Lanterns answer from the water.</div>
+    <div class="rule"></div>
+    <div id="endstats"></div>
+    <div class="foot" id="endfoot"></div>
+  </div>
+</div>
+
+<div id="hud"></div>
+<div id="objective"></div>
+<div id="prompt"></div>
+<div id="crosshair"></div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+/* =========================================================================
+   MALACCA — PORT OF THE WINDS · vertical slice
+   One morning of commerce as apprentice Syahbandar.
+   Loop: walk → observe → talk → inspect → resolve → stamp → tariff → repeat.
+   Win: all ships processed → sunset → the drum on the hill.
+   ========================================================================= */
+const V3=(x,y,z)=>new THREE.Vector3(x,y,z);
+const DOCK_Y=1.15;
+const SUN_DIR=V3(-0.32,0.30,-0.90).normalize();   // mutated during sunset
+const rand=(a,b)=>a+Math.random()*(b-a);
+
+/* ---------- renderer / rig / lights ---------- */
+const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.12;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.xr.enabled=true;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0xe2a76b,0.0062);
+const camera=new THREE.PerspectiveCamera(72,innerWidth/innerHeight,0.08,900);
+const pitch=new THREE.Object3D(); pitch.position.y=1.65; pitch.add(camera);
+const dolly=new THREE.Group(); dolly.add(pitch);
+dolly.position.set(4,DOCK_Y,33);              // spawn on the boardwalk, near the office
+dolly.rotation.y=Math.PI*0.55;
+scene.add(dolly);
+
+const sun=new THREE.DirectionalLight(0xffd9a6,2.6);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-70,right:70,top:70,bottom:-70,near:20,far:320});
+sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target);
+const hemi=new THREE.HemisphereLight(0x9db8d9,0x5c3d20,0.55); scene.add(hemi);
+const bounce=new THREE.DirectionalLight(0x6fa3c9,0.25); bounce.position.set(30,10,60); scene.add(bounce);
+
+/* =========================================================================
+   SKY — with a `dusk` uniform so the whole palette can slide to maghrib
+   ========================================================================= */
+const skyMat=new THREE.ShaderMaterial({
+  side:THREE.BackSide,depthWrite:false,fog:false,
+  uniforms:{sunDir:{value:SUN_DIR},dusk:{value:0}},
+  vertexShader:`varying vec3 vDir;
+    void main(){vDir=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+  fragmentShader:`
+    varying vec3 vDir; uniform vec3 sunDir; uniform float dusk;
+    void main(){
+      vec3 d=normalize(vDir);
+      float h=clamp(d.y,-0.05,1.0);
+      vec3 zenith =mix(vec3(0.16,0.34,0.55),vec3(0.05,0.09,0.22),dusk);
+      vec3 mid    =mix(vec3(0.55,0.60,0.66),vec3(0.44,0.26,0.34),dusk);
+      vec3 horizon=mix(vec3(0.98,0.66,0.36),vec3(0.96,0.38,0.18),dusk);
+      vec3 col=mix(horizon,mid,smoothstep(0.0,0.22,h));
+      col=mix(col,zenith,smoothstep(0.18,0.85,h));
+      float s=max(dot(d,sunDir),0.0);
+      col+=vec3(1.0,0.78,0.45)*pow(s,6.0)*(0.45+0.35*dusk);
+      col+=vec3(1.0,0.88,0.62)*pow(s,90.0)*0.9;
+      col+=vec3(1.0,0.94,0.78)*smoothstep(0.9994,0.9998,s)*3.0;
+      col=mix(col,mix(vec3(0.93,0.62,0.35),vec3(0.85,0.35,0.20),dusk),smoothstep(0.10,-0.05,d.y));
+      gl_FragColor=vec4(col,1.0);
+    }`
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(760,32,20),skyMat));
+
+(function clouds(){
+  const cvs=document.createElement('canvas');cvs.width=cvs.height=128;
+  const c=cvs.getContext('2d');
+  const g=c.createRadialGradient(64,64,8,64,64,62);
+  g.addColorStop(0,'rgba(255,240,220,0.85)');g.addColorStop(.6,'rgba(255,228,200,0.35)');
+  g.addColorStop(1,'rgba(255,228,200,0)');c.fillStyle=g;c.fillRect(0,0,128,128);
+  const tex=new THREE.CanvasTexture(cvs), geo=new THREE.PlaneGeometry(1,1);
+  for(let i=0;i<24;i++){
+    const m=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({map:tex,transparent:true,depthWrite:false,fog:false,opacity:rand(.25,.55)}));
+    const a=rand(0,6.28),r=rand(280,600);
+    m.position.set(Math.cos(a)*r,rand(60,190),Math.sin(a)*r);
+    m.scale.set(rand(90,260),rand(24,60),1); m.lookAt(0,m.position.y,0); scene.add(m);
+  }
+})();
+
+/* =========================================================================
+   WATER — Gerstner-style, dusk-aware reflections
+   ========================================================================= */
+const waterUniforms={
+  time:{value:0},sunDir:{value:SUN_DIR},dusk:{value:0},
+  deep:{value:new THREE.Color(0x0a3f43)},shallow:{value:new THREE.Color(0x2b7a72)},
+  fogColor:{value:new THREE.Color(0xe2a76b)},fogDensity:{value:0.0062},
+};
+const waterMat=new THREE.ShaderMaterial({
+  uniforms:waterUniforms,
+  vertexShader:`
+    uniform float time; varying vec3 vN; varying vec3 vW;
+    float wave(vec2 p, vec2 d, float k, float sp, float amp, out vec2 grad){
+      float ph=dot(p,d)*k+time*sp; grad=d*(k*amp*cos(ph)); return amp*sin(ph);}
+    void main(){
+      vec3 pos=position; vec2 p=pos.xz; vec2 g1,g2,g3,g4; float h=0.0;
+      h+=wave(p,normalize(vec2( 0.9,0.35)),0.28,0.9,0.30,g1);
+      h+=wave(p,normalize(vec2(-0.6,0.75)),0.55,1.4,0.13,g2);
+      h+=wave(p,normalize(vec2( 0.2,-1.0)),1.30,2.2,0.05,g3);
+      h+=wave(p,normalize(vec2( 1.0,0.0)),3.10,3.1,0.018,g4);
+      pos.y+=h; vec2 grad=g1+g2+g3+g4;
+      vN=normalize(vec3(-grad.x,1.0,-grad.y));
+      vec4 w=modelMatrix*vec4(pos,1.0); vW=w.xyz;
+      gl_Position=projectionMatrix*viewMatrix*w;
+    }`,
+  fragmentShader:`
+    uniform vec3 sunDir,deep,shallow,fogColor; uniform float fogDensity,time,dusk;
+    varying vec3 vN; varying vec3 vW;
+    vec3 skyFor(vec3 d){
+      float h=clamp(d.y,0.0,1.0);
+      vec3 zenith =mix(vec3(0.16,0.34,0.55),vec3(0.05,0.09,0.22),dusk);
+      vec3 mid    =mix(vec3(0.55,0.60,0.66),vec3(0.44,0.26,0.34),dusk);
+      vec3 horizon=mix(vec3(0.98,0.66,0.36),vec3(0.96,0.38,0.18),dusk);
+      vec3 col=mix(horizon,mid,smoothstep(0.0,0.22,h));
+      return mix(col,zenith,smoothstep(0.18,0.85,h));
+    }
+    void main(){
+      vec3 N=normalize(vN);
+      vec3 V=normalize(cameraPosition-vW);
+      N.xz+=0.04*vec2(sin(vW.x*2.1+time*2.0),cos(vW.z*1.7+time*1.6));
+      N=normalize(N);
+      float fres=mix(0.06,1.0,pow(1.0-max(dot(N,V),0.0),5.0));
+      vec3 R=reflect(-V,N); R.y=abs(R.y);
+      vec3 refl=skyFor(R);
+      vec3 Ls=normalize(sunDir);
+      float spec=pow(max(dot(R,Ls),0.0),720.0)*3.2+pow(max(dot(R,Ls),0.0),48.0)*0.35;
+      float sh=smoothstep(60.0,5.0,abs(vW.z-10.0));
+      vec3 body=mix(deep,shallow,sh*0.7)*(1.0-0.5*dusk);
+      body+=vec3(0.10,0.16,0.13)*max(dot(N,Ls),0.0);
+      vec3 col=mix(body,refl,fres)+mix(vec3(1.0,0.85,0.6),vec3(1.0,0.55,0.3),dusk)*spec;
+      float dist=length(cameraPosition-vW);
+      float f=1.0-exp(-fogDensity*fogDensity*dist*dist);
+      gl_FragColor=vec4(mix(col,fogColor,clamp(f,0.0,1.0)),1.0);
+    }`
+});
+const waterGeo=new THREE.PlaneGeometry(1200,1200,180,180);
+waterGeo.rotateX(-Math.PI/2);
+scene.add(new THREE.Mesh(waterGeo,waterMat));
+
+/* =========================================================================
+   MATERIALS
+   ========================================================================= */
+function canvasTex(w,h,draw){
+  const cvs=document.createElement('canvas');cvs.width=w;cvs.height=h;
+  draw(cvs.getContext('2d'),w,h);
+  const t=new THREE.CanvasTexture(cvs);
+  t.encoding=THREE.sRGBEncoding;t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+const woodTex=canvasTex(256,256,(c,w,h)=>{
+  c.fillStyle='#7c5230';c.fillRect(0,0,w,h);
+  for(let i=0;i<900;i++){
+    c.strokeStyle=`rgba(${40+Math.random()*60|0},${24+Math.random()*36|0},${10+Math.random()*18|0},${.12+Math.random()*.25})`;
+    c.lineWidth=1+Math.random()*2;
+    const y=Math.random()*h;c.beginPath();
+    c.moveTo(-10,y);c.bezierCurveTo(w*.3,y+rand(-6,6),w*.7,y+rand(-6,6),w+10,y+rand(-4,4));c.stroke();
+  }
+  for(let i=0;i<12;i++){c.fillStyle='rgba(35,20,8,0.5)';
+    c.beginPath();c.ellipse(Math.random()*w,Math.random()*h,rand(2,5),rand(4,9),0,0,7);c.fill();}
+});
+const darkWoodTex=canvasTex(256,256,(c,w,h)=>{
+  c.fillStyle='#4a2f18';c.fillRect(0,0,w,h);
+  for(let i=0;i<700;i++){c.strokeStyle=`rgba(20,12,5,${.1+Math.random()*.3})`;
+    const y=Math.random()*h;c.beginPath();c.moveTo(0,y);c.lineTo(w,y+rand(-5,5));c.stroke();}
+});
+const clothTex=canvasTex(128,128,(c,w,h)=>{
+  c.fillStyle='#c9a06a';c.fillRect(0,0,w,h);
+  c.strokeStyle='rgba(120,85,45,.35)';
+  for(let i=0;i<w;i+=3){c.beginPath();c.moveTo(i,0);c.lineTo(i,h);c.stroke();
+    c.beginPath();c.moveTo(0,i);c.lineTo(w,i);c.stroke();}
+});
+const M={
+  plank:new THREE.MeshStandardMaterial({map:woodTex,roughness:.85}),
+  darkWood:new THREE.MeshStandardMaterial({map:darkWoodTex,roughness:.9}),
+  rope:new THREE.MeshStandardMaterial({color:0x9a7a4a,roughness:1}),
+  hull:new THREE.MeshStandardMaterial({map:darkWoodTex,color:0x8a6a45,roughness:.8}),
+  hullDark:new THREE.MeshStandardMaterial({map:darkWoodTex,color:0x5a4028,roughness:.85}),
+  attap:new THREE.MeshStandardMaterial({color:0x8a6a3a,roughness:1}),
+  tileRoof:new THREE.MeshStandardMaterial({color:0x9e4f2e,roughness:.9}),
+  white:new THREE.MeshStandardMaterial({color:0xe8ddc6,roughness:.9}),
+  skin:new THREE.MeshStandardMaterial({color:0x8a5a3a,roughness:.8}),
+  brass:new THREE.MeshStandardMaterial({color:0xc9962e,roughness:.35,metalness:.8}),
+  bronze:new THREE.MeshStandardMaterial({color:0x8a6428,roughness:.4,metalness:.7}),
+  porcelain:new THREE.MeshStandardMaterial({color:0xe9eef0,roughness:.15}),
+  green:new THREE.MeshStandardMaterial({color:0x5a7a3a,roughness:.9}),
+  sand:new THREE.MeshStandardMaterial({color:0xc9a97a,roughness:1}),
+};
+
+/* cloth shader — wind + backlit translucency, dusk-aware fog */
+const clothMats=[];
+function clothMat(color,translucence=0.9){
+  const m=new THREE.ShaderMaterial({
+    side:THREE.DoubleSide,
+    uniforms:{time:{value:0},sunDir:{value:SUN_DIR},tint:{value:new THREE.Color(color)},
+      trans:{value:translucence},fogColor:{value:new THREE.Color(0xe2a76b)},
+      fogDensity:{value:0.0062},tex:{value:clothTex}},
+    vertexShader:`
+      uniform float time; varying vec3 vN; varying vec3 vW; varying vec2 vUv;
+      void main(){
+        vUv=uv; vec3 pos=position;
+        float edge=smoothstep(0.0,0.35,uv.x)*smoothstep(0.0,0.35,1.0-uv.y);
+        pos+=normal*(sin(uv.y*7.0+time*1.7)+sin(uv.x*5.0-time*1.2))*0.06*edge;
+        vN=normalize(normalMatrix*normal);
+        vec4 w=modelMatrix*vec4(pos,1.0); vW=w.xyz;
+        gl_Position=projectionMatrix*viewMatrix*w;
+      }`,
+    fragmentShader:`
+      uniform vec3 sunDir,tint,fogColor; uniform float trans,fogDensity;
+      uniform sampler2D tex;
+      varying vec3 vN; varying vec3 vW; varying vec2 vUv;
+      void main(){
+        vec3 N=normalize(vN); vec3 L=normalize(sunDir);
+        float nl=dot(N,L);
+        float diff=max(nl,0.0)*0.9+0.35;
+        float back=max(-nl,0.0)*trans;
+        vec3 weave=texture2D(tex,vUv*3.0).rgb;
+        vec3 col=tint*weave*diff+vec3(1.0,0.82,0.55)*back*weave;
+        float dist=length(cameraPosition-vW);
+        float f=1.0-exp(-fogDensity*fogDensity*dist*dist);
+        gl_FragColor=vec4(mix(col,fogColor,clamp(f,0.0,1.0)),1.0);
+      }`});
+  clothMats.push(m); return m;
+}
+function makeCloth(color,w,h,segs=14){return new THREE.Mesh(new THREE.PlaneGeometry(w,h,segs,segs),clothMat(color));}
+/* triangular lateen sail: taper a plane's top edge to a point, keep uvs */
+function makeLateen(color,w,h){
+  const g=new THREE.PlaneGeometry(w,h,16,16);
+  const p=g.attributes.position, uv=g.attributes.uv;
+  for(let i=0;i<p.count;i++){
+    const t=uv.getY(i);                 // 0 bottom → 1 top
+    p.setX(i, p.getX(i)*(1.0-t*0.96));
+  }
+  g.computeVertexNormals();
+  return new THREE.Mesh(g,clothMat(color));
+}
+
+/* =========================================================================
+   DECKS + COLLISION (with seam connectors)
+   ========================================================================= */
+const walkables=[];
+function addWalk(x1,z1,x2,z2){walkables.push({x1:Math.min(x1,x2),x2:Math.max(x1,x2),z1:Math.min(z1,z2),z2:Math.max(z1,z2)});}
+function buildDeck(x1,z1,x2,z2,alongX){
+  const W=Math.abs(x2-x1),D=Math.abs(z2-z1),cx=(x1+x2)/2,cz=(z1+z2)/2;
+  const plankW=0.42,gap=0.035;
+  const count=Math.ceil((alongX?D:W)/(plankW+gap));
+  const len=(alongX?W:D);
+  const geo=new THREE.BoxGeometry(alongX?len:plankW,0.09,alongX?plankW:len);
+  const mesh=new THREE.InstancedMesh(geo,M.plank,count);
+  const mtx=new THREE.Matrix4(),q=new THREE.Quaternion(),s=V3(1,1,1),col=new THREE.Color();
+  for(let i=0;i<count;i++){
+    const off=-((alongX?D:W)/2)+i*(plankW+gap)+plankW/2;
+    const p=alongX?V3(cx+rand(-.04,.04),DOCK_Y-0.045+rand(-.012,.012),cz+off)
+                  :V3(cx+off,DOCK_Y-0.045+rand(-.012,.012),cz+rand(-.04,.04));
+    q.setFromEuler(new THREE.Euler(rand(-.008,.008),alongX?rand(-.01,.01):0,rand(-.008,.008)));
+    mtx.compose(p,q,s);mesh.setMatrixAt(i,mtx);
+    col.setHSL(0.075+rand(-.012,.012),rand(.32,.45),rand(.30,.42));
+    mesh.setColorAt(i,col);
+  }
+  mesh.castShadow=mesh.receiveShadow=true;scene.add(mesh);
+  addWalk(x1,z1,x2,z2);
+  const pileGeo=new THREE.CylinderGeometry(0.16,0.2,DOCK_Y+2.2,7);
+  for(let x=Math.min(x1,x2)+0.3;x<=Math.max(x1,x2)-0.29;x+=Math.max(2.6,W-0.6)){
+    for(let z=Math.min(z1,z2)+0.3;z<=Math.max(z1,z2)-0.29;z+=3.1){
+      const pl=new THREE.Mesh(pileGeo,M.darkWood);
+      pl.position.set(x+rand(-.06,.06),(DOCK_Y-2.2)/2+0.9,z+rand(-.06,.06));
+      pl.rotation.y=rand(0,3);pl.castShadow=true;scene.add(pl);
+    }
+  }
+}
+/* boardwalk · main jetty · two finger docks · T-head */
+buildDeck(-32, 26, 32, 40, true);       // shore boardwalk (office / warehouse / market)
+buildDeck(-5, -40, 5, 26, false);       // main jetty
+buildDeck(  5,-10, 11, -6, true);       // Dock I  — east finger (Chinese junk)
+buildDeck(-11,-28, -5,-24, true);       // Dock II — west finger (Arab dhow)
+buildDeck(-15,-47, 15,-39, true);       // Dock III — T-head (Malay jong)
+/* seam connectors — collision-only; the 0.35m interior margin needs overlap */
+addWalk(-4.6, 23, 4.6, 29);
+addWalk(-4.6,-43, 4.6,-36);
+addWalk( 2.0,-9.6, 8.0,-6.4);
+addWalk(-8.0,-27.6,-2.0,-24.4);
+
+/* bollards + rope along the main jetty */
+function ropeBetween(a,b,sag=0.35){
+  const mid=a.clone().add(b).multiplyScalar(0.5);mid.y-=sag;
+  const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a,mid,b]),12,0.028,5),M.rope);
+  m.castShadow=true;scene.add(m);
+}
+(function bollards(){
+  const g=new THREE.CylinderGeometry(0.12,0.15,0.62,8);
+  let prevL=null,prevR=null;
+  for(let z=24;z>=-38;z-=5.2){
+    for(const side of[-1,1]){
+      /* leave gaps where the finger docks join */
+      if(side>0&&z<-4&&z>-12)continue;
+      if(side<0&&z<-22&&z>-30)continue;
+      const b=new THREE.Mesh(g,M.darkWood);
+      b.position.set(side*4.7,DOCK_Y+0.31,z);b.castShadow=true;scene.add(b);
+      const top=b.position.clone();top.y+=0.28;
+      if(side<0){if(prevL&&prevL.distanceTo(top)<7)ropeBetween(prevL,top);prevL=top;}
+      else{if(prevR&&prevR.distanceTo(top)<7)ropeBetween(prevR,top);prevR=top;}
+    }
+  }
+})();
+
+/* =========================================================================
+   THE SHORE — land, hills, mosque on the hill, godowns, market, palms
+   ========================================================================= */
+(function land(){
+  const g=new THREE.Mesh(new THREE.PlaneGeometry(260,180),M.sand);
+  g.rotation.x=-Math.PI/2;g.position.set(0,0.92,132);g.receiveShadow=true;scene.add(g);
+  /* backdrop hills — keep every footprint behind z ≈ 115 so nothing
+     looms over the boardwalk: nearest edge = z − r (z-scale is 1) */
+  const hillMat=new THREE.MeshStandardMaterial({color:0x3f5a35,roughness:1});
+  [[-48,158,38,.42],[42,168,52,.5],[-5,205,68,.55]].forEach(([x,z,r,sy])=>{
+    const h=new THREE.Mesh(new THREE.SphereGeometry(r,24,12,0,6.29,0,Math.PI/2),hillMat);
+    h.scale.set(1.35,sy,1);h.position.set(x,0.9,z);scene.add(h);
+  });
+  /* the mosque — seated on the nearest hilltop, scaled to read from the pier */
+  const mq=new THREE.Group();
+  const base=new THREE.Mesh(new THREE.BoxGeometry(9,4,9),M.white);
+  base.position.y=2;mq.add(base);
+  for(let i=0;i<3;i++){
+    const tier=new THREE.Mesh(new THREE.ConeGeometry(7-i*1.9,2.2,4),M.tileRoof);
+    tier.rotation.y=Math.PI/4;tier.position.y=5+i*2.0;mq.add(tier);
+  }
+  const fin=new THREE.Mesh(new THREE.SphereGeometry(0.4,8,8),M.brass);
+  fin.position.y=11.2;mq.add(fin);
+  const tower=new THREE.Mesh(new THREE.BoxGeometry(2.2,7,2.2),M.white);
+  tower.position.set(6.8,3.5,0);mq.add(tower);
+  const tRoof=new THREE.Mesh(new THREE.ConeGeometry(2.1,1.6,4),M.tileRoof);
+  tRoof.rotation.y=Math.PI/4;tRoof.position.set(6.8,7.8,0);mq.add(tRoof);
+  mq.position.set(-42,15.2,148);mq.scale.setScalar(2.0);
+  scene.add(mq);
+})();
+
+function godown(x,z,rotY,w=9,d=6,label){
+  const g=new THREE.Group();
+  const walls=new THREE.Mesh(new THREE.BoxGeometry(w,3.2,d),M.white);
+  walls.position.y=1.6+DOCK_Y;walls.castShadow=walls.receiveShadow=true;g.add(walls);
+  const roof=new THREE.Mesh(new THREE.ConeGeometry(Math.max(w,d)*0.78,2.2,4),M.tileRoof);
+  roof.position.y=4.3+DOCK_Y;roof.rotation.y=Math.PI/4;roof.castShadow=true;g.add(roof);
+  const beam=new THREE.Mesh(new THREE.BoxGeometry(w*1.06,0.22,d*1.06),M.darkWood);
+  beam.position.y=3.25+DOCK_Y;g.add(beam);
+  /* dark doorway */
+  const door=new THREE.Mesh(new THREE.PlaneGeometry(1.6,2.3),
+    new THREE.MeshBasicMaterial({color:0x140b04}));
+  door.position.set(0,1.15+DOCK_Y,d/2+0.011);g.add(door);
+  if(label){const sp=signSprite(label);sp.position.set(0,3.9+DOCK_Y,d/2+0.2);g.add(sp);}
+  g.position.set(x,0,z);g.rotation.y=rotY;scene.add(g);return g;
+}
+function signSprite(text){
+  const cvs=document.createElement('canvas');cvs.width=512;cvs.height=110;
+  const c=cvs.getContext('2d');
+  c.fillStyle='#2a1808';c.fillRect(0,0,512,110);
+  c.strokeStyle='#d9a441';c.lineWidth=4;c.strokeRect(5,5,502,100);
+  c.fillStyle='#f0dfc0';c.font='54px Georgia';c.textAlign='center';c.fillText(text,256,72);
+  const t=new THREE.CanvasTexture(cvs);t.encoding=THREE.sRGBEncoding;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthWrite:false}));
+  sp.scale.set(2.6,0.56,1);return sp;
+}
+godown( 18, 36,  0.0, 8, 6, 'PEJABAT SYAHBANDAR');   // the office
+godown(-16, 36,  0.0,11, 7, 'GUDANG');               // the warehouse
+godown( 27, 34,  0.15,6, 5);
+godown(-27, 34, -0.12,6, 5);
+
+function stall(x,z,rotY,awningColor){
+  const g=new THREE.Group();
+  const postG=new THREE.CylinderGeometry(0.07,0.08,2.4,6);
+  [[-1.4,-1],[1.4,-1],[-1.4,1],[1.4,1]].forEach(p=>{
+    const post=new THREE.Mesh(postG,M.darkWood);
+    post.position.set(p[0],1.2+DOCK_Y,p[1]);post.castShadow=true;g.add(post);
+  });
+  const awn=makeCloth(awningColor,3.4,2.6);
+  awn.rotation.x=-Math.PI/2+0.22;awn.position.set(0,2.42+DOCK_Y,0);awn.castShadow=true;g.add(awn);
+  const table=new THREE.Mesh(new THREE.BoxGeometry(2.6,0.1,1.1),M.plank);
+  table.position.set(0,0.86+DOCK_Y,0.1);table.castShadow=table.receiveShadow=true;g.add(table);
+  g.position.set(x,0,z);g.rotation.y=rotY;scene.add(g);return g;
+}
+stall(-6,31,-0.2,0xb8763a);   // spice
+stall(-1,31.5,0.15,0x3a5a7a); // cloth
+stall( 4,31,-0.1,0x8c2f5a);   // wares
+stall(10,30.5,0.25,0x6a7a3a); // the coffee stall
+
+/* palms */
+(function palms(){
+  const trunkG=new THREE.CylinderGeometry(0.13,0.22,6,7);
+  const frondG=new THREE.ConeGeometry(0.5,3.2,4);
+  [[-34,30],[-22,42],[24,42],[30,38],[36,31],[-38,35],[8,43],[-8,44]].forEach(([x,z])=>{
+    const lean=rand(-.12,.12);
+    const t=new THREE.Mesh(trunkG,M.darkWood);
+    t.position.set(x,3+DOCK_Y-0.4,z);t.rotation.z=lean;t.castShadow=true;scene.add(t);
+    for(let i=0;i<7;i++){
+      const f=new THREE.Mesh(frondG,M.green);
+      const a=i/7*Math.PI*2;
+      f.position.set(x+Math.sin(lean)*3+Math.cos(a)*1.1,6.1+DOCK_Y-0.4,z+Math.sin(a)*1.1);
+      f.rotation.set(Math.sin(a)*1.25,0,Math.cos(a)*1.25+lean);
+      f.castShadow=true;scene.add(f);
+    }
+  });
+})();
+
+/* =========================================================================
+   SHIPS — Chinese junk, Arab dhow, Malay jong (with the cracked mast)
+   ========================================================================= */
+function baseHull(len=10.5,beam=3.2,mat=M.hull){
+  const g=new THREE.Group();
+  const pts=[];for(let i=0;i<=10;i++){const t=i/10;pts.push(new THREE.Vector2(0.12+Math.sin(t*Math.PI)*1.9,t*3.4));}
+  const hull=new THREE.Mesh(new THREE.LatheGeometry(pts,10),mat);
+  hull.rotation.z=Math.PI/2;hull.rotation.x=Math.PI/2;
+  hull.scale.set(len/3.0,1.6,beam/3.0);hull.position.y=0.4;hull.castShadow=true;g.add(hull);
+  const deck=new THREE.Mesh(new THREE.BoxGeometry(len,0.25,beam),M.plank);
+  deck.position.y=1.35;deck.castShadow=deck.receiveShadow=true;g.add(deck);
+  return g;
+}
+function junkShip(){
+  const g=baseHull(10.5,3.2);
+  const cabin=new THREE.Mesh(new THREE.BoxGeometry(2.6,1.2,2.4),M.darkWood);
+  cabin.position.set(-3.2,2.0,0);cabin.castShadow=true;g.add(cabin);
+  [[1.4,10.5,7.2],[-0.9,7.5,5.0]].forEach(([mx,mh,sw],i)=>{
+    const mast=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.14,mh,7),M.darkWood);
+    mast.position.set(mx,mh/2+1.3,0);mast.castShadow=true;g.add(mast);
+    const sail=makeCloth(0xd9c49a,sw,mh*0.62,16);
+    sail.position.set(mx+0.15,mh*0.55+1.3,0);sail.rotation.y=0.28+i*0.1;sail.castShadow=true;g.add(sail);
+    for(let b=0;b<5;b++){
+      const bat=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,sw,5),M.darkWood);
+      bat.rotation.z=Math.PI/2;bat.position.set(mx+0.15,1.3+mh*0.28+b*(mh*0.55/5),0);
+      bat.rotation.y=0.28+i*0.1;g.add(bat);
+    }
+  });
+  const pen=makeCloth(0x8c2f1b,1.6,0.5);pen.position.set(1.5,12.3,0);g.add(pen);
+  return g;
+}
+function dhowShip(){
+  const g=baseHull(9.5,2.6,M.hullDark);
+  const mast=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.13,9,7),M.darkWood);
+  mast.position.set(0.4,5.8,0);mast.rotation.z=-0.10;mast.castShadow=true;g.add(mast);
+  const yard=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,11,6),M.darkWood);
+  yard.rotation.z=0.95;yard.position.set(0.6,7.4,0);yard.castShadow=true;g.add(yard);
+  const sail=makeLateen(0xe8ddc0,8.6,6.4);
+  sail.position.set(0.7,6.0,0.05);sail.rotation.z=-0.62;sail.rotation.y=0.12;
+  sail.castShadow=true;g.add(sail);
+  const stern=new THREE.Mesh(new THREE.BoxGeometry(1.9,1.0,2.0),M.darkWood);
+  stern.position.set(-3.4,1.95,0);stern.castShadow=true;g.add(stern);
+  return g;
+}
+function jongShip(){
+  const g=baseHull(12,3.6);
+  /* fore mast — sound, tanja sail brailed */
+  const m1=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.15,11,7),M.darkWood);
+  m1.position.set(2.2,6.8,0);m1.castShadow=true;g.add(m1);
+  const s1=makeCloth(0xc9a86a,6.4,5.2,14);
+  s1.position.set(2.35,7.4,0);s1.rotation.y=0.3;s1.rotation.z=0.5;s1.castShadow=true;g.add(s1);
+  /* main mast — CRACKED: tilted, broken spar hanging by a line */
+  const m2=new THREE.Mesh(new THREE.CylinderGeometry(0.11,0.16,9,7),M.darkWood);
+  m2.position.set(-1.6,5.4,0.2);m2.rotation.z=0.34;m2.rotation.x=0.12;m2.castShadow=true;g.add(m2);
+  const stump=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.09,3.4,6),M.darkWood);
+  stump.position.set(-3.4,3.4,0.9);stump.rotation.z=1.25;stump.rotation.x=0.5;stump.castShadow=true;g.add(stump);
+  ropeBetweenLocal(g,V3(-1.6,9.4,0.2),V3(-3.4,3.4,0.9),0.7);
+  const torn=makeCloth(0xb89a6a,4.5,3.2,12);
+  torn.position.set(-2.8,3.2,0.6);torn.rotation.z=1.1;torn.rotation.x=0.4;g.add(torn);
+  const kajang=makeCloth(0x8a6a3a,3.4,2.8);   // woven deck shelter
+  kajang.rotation.x=-Math.PI/2;kajang.position.set(-4.2,2.6,0);g.add(kajang);
+  return g;
+}
+function ropeBetweenLocal(parent,a,b,sag=0.4){
+  const mid=a.clone().add(b).multiplyScalar(0.5);mid.y-=sag;
+  const m=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([a,mid,b]),10,0.025,5),M.rope);
+  parent.add(m);
+}
+const junk=junkShip();  junk.position.set(15.5,0,-8);  junk.rotation.y=Math.PI/2*1.03; scene.add(junk);
+const dhow=dhowShip();  dhow.position.set(-15.5,0,-26);dhow.rotation.y=-Math.PI/2*0.97;scene.add(dhow);
+const jong=jongShip();  jong.position.set(0.5,0,-53);  jong.rotation.y=Math.PI*0.98;   scene.add(jong);
+const anchored=[junk,dhow,jong];
+anchored.forEach(s=>s.userData.bobPhase=rand(0,6.28));
+/* background traffic + sampans */
+const farJunk=junkShip();farJunk.position.set(52,-0.1,-78);farJunk.rotation.y=0.7;farJunk.scale.setScalar(1.25);scene.add(farJunk);
+const farDhow=dhowShip();farDhow.position.set(-58,-0.1,-96);farDhow.rotation.y=-0.5;farDhow.scale.setScalar(1.2);scene.add(farDhow);
+anchored.push(farJunk,farDhow);farJunk.userData.bobPhase=1;farDhow.userData.bobPhase=3;
+const sampans=[];
+function sampan(x,z,rot){
+  const s=new THREE.Group();
+  const b=new THREE.Mesh(new THREE.CylinderGeometry(0.9,0.5,3.6,7),M.hull);
+  b.rotation.z=Math.PI/2;b.scale.y=0.5;b.position.y=0.28;b.castShadow=true;s.add(b);
+  s.position.set(x,0,z);s.rotation.y=rot;s.userData.bobPhase=rand(0,6.28);
+  scene.add(s);sampans.push(s);
+}
+sampan(8,8,0.4);sampan(-8,4,-0.7);sampan(9,-33,1.2);sampan(-9,-14,2.2);
+
+/* =========================================================================
+   PROPS — crates, jars, sacks, lanterns, the harbor bell, chickens
+   ========================================================================= */
+function jar(x,z,scale=1,mat=M.porcelain){
+  const pts=[];for(let i=0;i<=8;i++){const t=i/8;
+    pts.push(new THREE.Vector2((0.16+Math.sin(t*Math.PI)*0.26)*scale,t*0.72*scale));}
+  const j=new THREE.Mesh(new THREE.LatheGeometry(pts,12),mat);
+  j.position.set(x,DOCK_Y,z);j.castShadow=true;scene.add(j);return j;
+}
+function crate(x,z,s=0.8,ry=0){
+  const c=new THREE.Mesh(new THREE.BoxGeometry(s,s,s),M.plank);
+  c.position.set(x,DOCK_Y+s/2,z);c.rotation.y=ry;
+  c.castShadow=c.receiveShadow=true;scene.add(c);return c;
+}
+function sack(x,z,s=0.5){
+  const m=new THREE.Mesh(new THREE.SphereGeometry(s,8,6),
+    new THREE.MeshStandardMaterial({color:0xb09468,roughness:1}));
+  m.scale.y=0.75;m.position.set(x,DOCK_Y+s*0.6,z);m.castShadow=true;scene.add(m);return m;
+}
+const flickerLights=[];
+function lantern(x,y,z){
+  const g=new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.14,0.18,0.34,6,1,true),
+    new THREE.MeshStandardMaterial({color:0x3a2410,roughness:.6,side:THREE.DoubleSide})));
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(0.1,8,8),new THREE.MeshBasicMaterial({color:0xffc46a})));
+  const pl=new THREE.PointLight(0xff9c3a,0.85,7,2);g.add(pl);flickerLights.push(pl);
+  g.position.set(x,y,z);scene.add(g);return g;
+}
+/* clutter */
+crate(-3.8,18,.9,.3);crate(-3.7,17,.7,.8);crate(3.9,12,.85,.5);crate(3.9,12.9,.6,1.2);
+crate(-4,-12,.9,.2);crate(-3.2,-11.6,.6,.4);crate(4,-33,.8);
+crate(7.2,-8.8,.8,.3);crate(8.1,-8.7,.62,.9);          // by the junk
+sack(-7.2,-26.6);sack(-6.4,-27.1,.4);                  // by the dhow
+crate(9,-42,.85,.4);crate(9.9,-42.2,.6);               // T-head stores
+jar(13.2,-6.8,1.1);jar(12.6,-7.4,0.8);                 // porcelain landed from the junk
+spiceHeap(-6.6,30.3,0x5a2c10);spiceHeap(-5.6,30.6,0x8a5a1a);
+jar(-0.6,31.0,0.9,new THREE.MeshStandardMaterial({color:0x7a5a2a,roughness:.6}));
+function spiceHeap(x,z,color){
+  const plate=new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.36,0.05,16),M.brass);
+  plate.position.set(x,DOCK_Y+0.92,z);plate.castShadow=true;scene.add(plate);
+  const heap=new THREE.Mesh(new THREE.ConeGeometry(0.33,0.16,12),
+    new THREE.MeshStandardMaterial({color,roughness:1}));
+  heap.position.set(x,DOCK_Y+1.0,z);scene.add(heap);
+}
+/* warehouse bale stack (the misdelivered cotton lives here) */
+const baleStack=new THREE.Group();
+for(let i=0;i<4;i++){
+  const b=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.55,0.6),
+    new THREE.MeshStandardMaterial({color:0xd8cba8,roughness:1}));
+  b.position.set((i%2)*0.95-0.4,DOCK_Y+0.28+Math.floor(i/2)*0.58,0);
+  b.rotation.y=rand(-.1,.1);b.castShadow=true;baleStack.add(b);
+}
+baleStack.position.set(-20.5,0,32.5);scene.add(baleStack);
+crate(-23,32,.8,.2);crate(-23,32.9,.6,.9);sack(-18,31.6,.45);
+
+/* the harbor bell — bronze, on a frame at the jetty mouth */
+const bellGroup=new THREE.Group();
+{
+  const legG=new THREE.CylinderGeometry(0.07,0.09,2.6,6);
+  [-0.5,0.5].forEach(x=>{const l=new THREE.Mesh(legG,M.darkWood);
+    l.position.set(x,1.3+DOCK_Y,0);l.castShadow=true;bellGroup.add(l);});
+  const cross=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,1.3,6),M.darkWood);
+  cross.rotation.z=Math.PI/2;cross.position.set(0,2.55+DOCK_Y,0);bellGroup.add(cross);
+  const bellPts=[];for(let i=0;i<=8;i++){const t=i/8;
+    bellPts.push(new THREE.Vector2(0.06+t*t*0.26,-t*0.42));}
+  const bell=new THREE.Mesh(new THREE.LatheGeometry(bellPts,14),M.bronze);
+  bell.position.set(0,2.5+DOCK_Y,0);bell.castShadow=true;bellGroup.add(bell);
+  bellGroup.userData.bell=bell;
+}
+bellGroup.position.set(2.4,0,27.8);scene.add(bellGroup);
+let bellSwing=0;
+
+/* chickens near the market */
+const chickens=[];
+for(let i=0;i<3;i++){
+  const c=new THREE.Group();
+  const body=new THREE.Mesh(new THREE.SphereGeometry(0.14,8,7),
+    new THREE.MeshStandardMaterial({color:i?0xc9b8a0:0x6a4028,roughness:1}));
+  body.scale.set(1,0.85,1.25);body.position.y=0.16;c.add(body);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.06,7,6),body.material);
+  head.position.set(0,0.31,0.15);c.add(head);
+  const comb=new THREE.Mesh(new THREE.ConeGeometry(0.03,0.06,5),
+    new THREE.MeshStandardMaterial({color:0xb02818}));
+  comb.position.set(0,0.38,0.15);c.add(comb);
+  c.position.set(6.5+rand(-1,1),DOCK_Y,34+rand(-1,1));
+  c.userData={home:c.position.clone(),tgt:c.position.clone(),wait:rand(0,2)};
+  scene.add(c);chickens.push(c);
+}
+
+lantern(-4.4,DOCK_Y+2.1,20);lantern(4.4,DOCK_Y+2.1,-2);lantern(-4.4,DOCK_Y+2.1,-26);
+lantern(16,DOCK_Y+2.6,33);lantern(-14,DOCK_Y+2.6,33);
+
+/* =========================================================================
+   PEOPLE — speaking NPCs, ambient crowd, walkers
+   ========================================================================= */
+function labelSprite(text,sub){
+  const cvs=document.createElement('canvas');cvs.width=512;cvs.height=160;
+  const c=cvs.getContext('2d');
+  c.fillStyle='rgba(20,11,4,0.72)';c.fillRect(0,0,512,160);
+  c.strokeStyle='#d9a441';c.lineWidth=3;c.strokeRect(6,6,500,148);
+  c.fillStyle='#f0dfc0';c.font='52px Georgia';c.textAlign='center';c.fillText(text,256,66);
+  c.fillStyle='#d9a441';c.font='italic 30px Georgia';c.fillText(sub,256,116);
+  const t=new THREE.CanvasTexture(cvs);t.encoding=THREE.sRGBEncoding;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthWrite:false}));
+  sp.scale.set(2.3,0.72,1);return sp;
+}
+function figure(clothColor,hatType){
+  const g=new THREE.Group();
+  const robeM=new THREE.MeshStandardMaterial({color:clothColor,roughness:.95});
+  const robe=new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.4,1.15,8),robeM);
+  robe.position.y=0.62;robe.castShadow=true;g.add(robe);
+  const chest=new THREE.Mesh(new THREE.SphereGeometry(0.27,10,8),robeM);
+  chest.position.y=1.22;chest.scale.set(1,0.85,0.8);chest.castShadow=true;g.add(chest);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.17,10,10),M.skin);
+  head.position.y=1.62;head.castShadow=true;g.add(head);
+  let hat;
+  if(hatType==='serban'){hat=new THREE.Mesh(new THREE.TorusGeometry(0.15,0.075,8,14),M.white);
+    hat.rotation.x=Math.PI/2;hat.position.y=1.72;}
+  else if(hatType==='tanjak'){hat=new THREE.Mesh(new THREE.ConeGeometry(0.16,0.16,4),
+    new THREE.MeshStandardMaterial({color:0x8c2f1b,roughness:.8}));hat.position.y=1.78;hat.rotation.y=0.6;}
+  else if(hatType==='songkok'){hat=new THREE.Mesh(new THREE.CylinderGeometry(0.13,0.14,0.12,10),
+    new THREE.MeshStandardMaterial({color:0x1a1410,roughness:.9}));hat.position.y=1.76;}
+  else{hat=new THREE.Mesh(new THREE.ConeGeometry(0.24,0.12,12),M.attap);hat.position.y=1.75;}
+  hat.castShadow=true;g.add(hat);
+  const armG=new THREE.CylinderGeometry(0.055,0.05,0.6,6);
+  [-1,1].forEach(s=>{const a=new THREE.Mesh(armG,robeM);
+    a.position.set(s*0.3,1.15,0.08);a.rotation.z=s*0.5;a.rotation.x=-0.35;a.castShadow=true;g.add(a);});
+  return g;
+}
+const npcs={};
+function speakNPC(id,name,title,x,z,rot,clothColor,hat){
+  const g=figure(clothColor,hat);
+  g.position.set(x,DOCK_Y,z);g.rotation.y=rot;
+  const lab=labelSprite(name,title);lab.position.set(0,2.35,0);g.add(lab);
+  g.userData={bob:rand(0,6.28),name};
+  scene.add(g);npcs[id]=g;return g;
+}
+speakNPC('mentor','Tuan Karim','Syahbandar of Melaka', 16.2,32.2, 2.7, 0x3a4a2a,'tanjak');
+speakNPC('foreman','Pak Awang','dock foreman',        -13.2,32.0,-2.6, 0x6b5a3a,'straw');
+speakNPC('zheng','Captain Zheng','junk “Fu Chun” · Ming', 8.6,-7.6,-1.9, 0x2f4a6b,'straw');
+speakNPC('rashid','Nakhoda Rashid','dhow “Al-Manṣūra”',  -8.7,-26.4, 1.7, 0x7a5a2a,'serban');
+speakNPC('interp','Mariam','interpreter · Melaka',       -6.9,-25.2, 2.1, 0x6a3a5a,'songkok');
+speakNPC('megat','Nakhoda Megat','jong “Sri Gunung”',     0.6,-43.4, 3.1, 0x8c2f1b,'tanjak');
+speakNPC('ros','Kak Ros','the coffee stall',             10.2, 31.6, 3.0, 0x4a6a5a,'songkok');
+
+/* ambient crowd — statics + walkers + (later) the repair crew */
+const ambients=[];
+function ambient(x,z,rot){
+  const colors=[0x6b4f2a,0x4a5a6b,0x7a3a3a,0x5a6a3a,0x6a5a7a,0x8a6a3a];
+  const hats=['straw','songkok','serban','tanjak','straw','songkok'];
+  const g=figure(colors[Math.floor(Math.random()*colors.length)],hats[Math.floor(Math.random()*hats.length)]);
+  g.position.set(x,DOCK_Y,z);g.rotation.y=rot;
+  g.userData={bob:rand(0,6.28)};scene.add(g);ambients.push(g);return g;
+}
+[[-4.5,30.5,0.4],[-6.8,29.6,-0.3],[0.4,30,0.1],[3.2,29.8,-2.9],[5.2,30.4,2.6],
+ [11.2,29.4,-0.4],[-24,31,1.6],[-9,33.5,0.9],[20,31,2.2],[24,33,-1.4],
+ [2,20,0.2],[-2,6,2.8],[3,-18,-0.4],[10,-7,1.2],[-8,-27.6,0.4],
+ [6,-42,1.9],[-6,-43,-1.0],[13,-41.5,0.7]].forEach(([x,z,r])=>ambient(x,z,r));
+const walkers=[];
+function walker(pts,speed){
+  const g=ambient(pts[0].x,pts[0].z,0);
+  walkers.push({g,pts,seg:0,t:rand(0,1),speed});
+}
+walker([V3(-28,0,33),V3(28,0,33)],0.55);
+walker([V3(26,0,30),V3(-26,0,30)],0.45);
+walker([V3(0,0,24),V3(0,0,-34)],0.5);
+walker([V3(-1.5,0,-36),V3(-1.5,0,20)],0.42);
+walker([V3(-13,0,-42),V3(12,0,-42)],0.4);
+let crew=null;   // repair crew appears after the bell musters them
+
+/* gulls */
+const gulls=[];
+for(let i=0;i<7;i++){
+  const g=new THREE.Group();
+  const wingG=new THREE.PlaneGeometry(0.9,0.28);
+  const m=new THREE.MeshBasicMaterial({color:0xf0e8d8,side:THREE.DoubleSide});
+  const l=new THREE.Mesh(wingG,m);l.position.x=-0.45;g.add(l);
+  const r=new THREE.Mesh(wingG,m);r.position.x=0.45;g.add(r);
+  g.userData={l,r,ph:rand(0,6.28),r0:rand(14,42),h:rand(9,22),sp:rand(.1,.22),cx:rand(-15,15),cz:rand(-30,5)};
+  scene.add(g);gulls.push(g);
+}
+
+/* =========================================================================
+   AUDIO — surf · bronze · stamp · bell · beduk
+   ========================================================================= */
+let AC=null;
+function initAudio(){
+  if(AC)return;
+  AC=new (window.AudioContext||window.webkitAudioContext)();
+  const len=AC.sampleRate*4,buf=AC.createBuffer(1,len,AC.sampleRate);
+  const d=buf.getChannelData(0);let last=0;
+  for(let i=0;i<len;i++){const w=Math.random()*2-1;last=(last+0.02*w)/1.02;d[i]=last*3.2;}
+  const src=AC.createBufferSource();src.buffer=buf;src.loop=true;
+  const lp=AC.createBiquadFilter();lp.type='lowpass';lp.frequency.value=420;
+  const g=AC.createGain();g.gain.value=0.10;
+  const lfo=AC.createOscillator();lfo.frequency.value=0.09;
+  const lg=AC.createGain();lg.gain.value=0.05;
+  lfo.connect(lg);lg.connect(g.gain);
+  src.connect(lp);lp.connect(g);g.connect(AC.destination);src.start();lfo.start();
+}
+function gong(base=291.6,vol=0.22,decay=1.4){
+  if(!AC)return;const t=AC.currentTime;
+  [[1,1],[2.76,0.4],[5.4,0.18],[1.02,0.6]].forEach(([mul,amp])=>{
+    const o=AC.createOscillator();o.type='sine';o.frequency.value=base*mul;
+    const g=AC.createGain();
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(vol*amp,t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+decay);
+    o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+decay+0.1);
+  });
+}
+const SLENDRO=[233.1,261.6,291.6,349.2,391.9];
+function stampSound(){
+  if(!AC)return;const t=AC.currentTime;
+  const o=AC.createOscillator();o.type='sine';
+  o.frequency.setValueAtTime(180,t);o.frequency.exponentialRampToValueAtTime(60,t+0.09);
+  const g=AC.createGain();
+  g.gain.setValueAtTime(0.5,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.14);
+  o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+0.16);
+  const n=AC.createBufferSource();
+  const nb=AC.createBuffer(1,AC.sampleRate*0.06,AC.sampleRate);
+  const nd=nb.getChannelData(0);for(let i=0;i<nd.length;i++)nd[i]=(Math.random()*2-1)*(1-i/nd.length);
+  n.buffer=nb;
+  const bp=AC.createBiquadFilter();bp.type='bandpass';bp.frequency.value=900;
+  const ng=AC.createGain();ng.gain.value=0.25;
+  n.connect(bp);bp.connect(ng);ng.connect(AC.destination);n.start(t);
+}
+function bellSound(){gong(392,0.32,3.4);gong(394.5,0.14,3.0);bellSwing=1;}
+function beduk(){          // the drum before maghrib — accelerating pattern
+  if(!AC)return;
+  const hit=(at,vol)=>{
+    const t=AC.currentTime+at;
+    const o=AC.createOscillator();o.type='sine';
+    o.frequency.setValueAtTime(78,t);o.frequency.exponentialRampToValueAtTime(46,t+0.35);
+    const g=AC.createGain();
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(vol,t+0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.9);
+    o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+1);
+  };
+  let at=0,gapp=0.9;
+  for(let i=0;i<9;i++){hit(at,0.5);at+=gapp;gapp=Math.max(0.12,gapp*0.72);}
+  hit(at+0.8,0.6);
+}
+
+/* =========================================================================
+   GAME STATE — the Ledger is the truth
+   ========================================================================= */
+const SHIPS={
+  junk:{key:'junk',dock:'Dock I',ship:'Fu Chun',type:'Chinese junk',captain:'Captain Zheng',
+    cargo:[['Porcelain','120 pieces','Jingdezhen'],['Silk','8 bolts','Suzhou'],['Tea','14 chests','Fujian']],
+    tariff:12,status:'moored',notes:[]},
+  dhow:{key:'dhow',dock:'Dock II',ship:'Al-Manṣūra',type:'Arab dhow',captain:'Nakhoda Rashid',
+    cargo:[['Cotton','40 bales','Gujarat'],['Frankincense','6 chests','Ḥaḍramawt'],['Dates','20 sacks','Baṣra']],
+    tariff:15,status:'moored',notes:[]},
+  jong:{key:'jong',dock:'Dock III',ship:'Sri Gunung',type:'Malay jong',captain:'Nakhoda Megat',
+    cargo:[['Tin','30 ingots','Perak'],['Camphor','4 chests','Barus'],['Rice','35 sacks','Jawa']],
+    tariff:8,status:'moored',notes:[]},
+};
+const Q={
+  briefed:false,
+  event:['spices','crate','dues'][Math.floor(Math.random()*3)],   // one dynamic event per playthrough
+  eventDone:false,
+  dhowStage:'moored',   // moored → mismatch → askForeman → foundBales → cleared
+  jongStage:'moored',   // moored → needCrew → toldBell → crewSent
+  coffee:false,
+  chickensFed:false,
+  startTime:0,
+};
+const state={gold:0,notes:[]};
+function approvedCount(){return Object.values(SHIPS).filter(s=>s.status==='approved').length;}
+function note(txt){state.notes.push(txt);renderHUD();}
+
+/* broken-crate event prop (only if drawn) */
+let brokenCrate=null;
+if(Q.event==='crate'){
+  brokenCrate=new THREE.Group();
+  const c=crate(2.8,-14.5,.85,.5);scene.remove(c);brokenCrate.add(c);c.position.set(0,DOCK_Y+.42,0);
+  c.rotation.z=0.5;c.position.y=DOCK_Y+0.3;
+  for(let i=0;i<5;i++){
+    const sh=new THREE.Mesh(new THREE.BoxGeometry(rand(.1,.25),.02,rand(.08,.2)),M.porcelain);
+    sh.position.set(rand(-.8,.8),DOCK_Y+.03,rand(-.5,.5));sh.rotation.y=rand(0,3);
+    brokenCrate.add(sh);
+  }
+  brokenCrate.position.set(2.8,0,-14.5);scene.add(brokenCrate);
+}
+
+/* =========================================================================
+   HUD / OBJECTIVES / TOAST
+   ========================================================================= */
+const hudEl=document.getElementById('hud'),promptEl=document.getElementById('prompt'),
+      toastEl=document.getElementById('toast'),objEl=document.getElementById('objective'),
+      chEl=document.getElementById('crosshair');
+let toastTimer=null;
+function toast(msg){
+  toastEl.textContent=msg;toastEl.style.opacity=1;
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.style.opacity=0,3200);
+}
+function renderHUD(){
+  hudEl.innerHTML=`<span class="gold">◉ ${state.gold} in tariffs</span><br>
+    <small>SHIPS PROCESSED ${approvedCount()} / 3</small><br>
+    <small style="color:#8a6f4d">Tab — ledger</small>`;
+  vrHudNeedsRedraw=true;
+  renderObjectives();
+}
+function currentObjectives(){
+  const o=[];
+  if(!Q.briefed){o.push('Report to Tuan Karim at the Syahbandar office.');return o;}
+  if(SHIPS.junk.status!=='approved')o.push('Dock I — inspect the Fu Chun and stamp her manifest.');
+  if(SHIPS.dhow.status!=='approved'){
+    if(Q.dhowStage==='mismatch')o.push('Dock II — the cotton count is short. Someone on shore may know.');
+    else if(Q.dhowStage==='askForeman')o.push('Search the warehouse for the missing bales.');
+    else if(Q.dhowStage==='foundBales')o.push('Return to Nakhoda Rashid with the good news.');
+    else o.push('Dock II — inspect the Al-Manṣūra.');
+  }
+  if(SHIPS.jong.status!=='approved'){
+    if(Q.jongStage==='needCrew')o.push('The Sri Gunung needs carpenters. Ask Pak Awang, the foreman.');
+    else if(Q.jongStage==='toldBell')o.push('Ring the harbor bell to muster the work crew.');
+    else if(Q.jongStage==='crewSent')o.push('Tell Nakhoda Megat his crew is coming — and stamp him in.');
+    else o.push('Dock III — see to the damaged jong at the T-head.');
+  }
+  if(o.length===0)o.push('All ships processed. The harbor closes.');
+  return o;
+}
+function renderObjectives(){
+  objEl.innerHTML='<span class="oh">THE MORNING\'S WORK</span><br>'+
+    currentObjectives().map(s=>'· '+s).join('<br>');
+}
+
+/* VR wrist HUD */
+const vrHudCvs=document.createElement('canvas');vrHudCvs.width=512;vrHudCvs.height=192;
+const vrHudTex=new THREE.CanvasTexture(vrHudCvs);vrHudTex.encoding=THREE.sRGBEncoding;
+let vrHudNeedsRedraw=true;
+const vrHud=new THREE.Mesh(new THREE.PlaneGeometry(0.44,0.165),
+  new THREE.MeshBasicMaterial({map:vrHudTex,transparent:true,depthTest:false}));
+vrHud.position.set(0,-0.42,-0.9);vrHud.renderOrder=999;vrHud.visible=false;
+camera.add(vrHud);
+function drawVrHud(){
+  const c=vrHudCvs.getContext('2d');
+  c.clearRect(0,0,512,192);
+  c.fillStyle='rgba(20,11,4,0.7)';c.fillRect(0,0,512,192);
+  c.strokeStyle='#d9a44188';c.strokeRect(3,3,506,186);
+  c.fillStyle='#d9a441';c.font='34px Georgia';c.textAlign='left';
+  c.fillText(`◉ ${state.gold} in tariffs`,22,52);
+  c.fillStyle='#9c7f57';c.font='22px Georgia';
+  c.fillText(`ships processed ${approvedCount()} / 3`,22,92);
+  c.fillStyle='#f0dfc0';c.font='italic 20px Georgia';
+  const obj=currentObjectives()[0]||'';
+  c.fillText(obj.slice(0,44),22,132);
+  if(obj.length>44)c.fillText(obj.slice(44,88),22,158);
+  vrHudTex.needsUpdate=true;
+}
+
+/* =========================================================================
+   PANEL — one 3D canvas surface for dialogue, manifests, and the ledger
+   ========================================================================= */
+const panel={group:new THREE.Group(),mesh:null,cvs:null,tex:null,
+  cfg:null,rowRects:[],hover:-1,open:false};
+panel.cvs=document.createElement('canvas');panel.cvs.width=680;panel.cvs.height=840;
+panel.tex=new THREE.CanvasTexture(panel.cvs);panel.tex.encoding=THREE.sRGBEncoding;
+panel.mesh=new THREE.Mesh(new THREE.PlaneGeometry(1.02,1.26),
+  new THREE.MeshBasicMaterial({map:panel.tex,transparent:true,side:THREE.DoubleSide}));
+panel.group.add(panel.mesh);panel.group.visible=false;scene.add(panel.group);
+
+function showPanel(cfg){
+  panel.cfg=cfg;panel.hover=-1;panel.open=true;
+  const head=new THREE.Vector3();camera.getWorldPosition(head);
+  const fwd=new THREE.Vector3();camera.getWorldDirection(fwd);fwd.y=0;fwd.normalize();
+  panel.group.position.copy(head).add(fwd.multiplyScalar(1.35));
+  panel.group.position.y=head.y-0.05;
+  panel.group.lookAt(head);
+  panel.group.visible=true;
+  drawPanelCanvas();
+}
+function closePanel(){panel.open=false;panel.group.visible=false;}
+function wrapText(c,txt,x,y,maxW,lh){
+  for(const para of txt.split('\n')){
+    let line='';
+    for(const w of para.split(' ')){
+      if(c.measureText(line+w).width>maxW){c.fillText(line,x,y);line=w+' ';y+=lh;}
+      else line+=w+' ';
+    }
+    c.fillText(line,x,y);y+=lh;
+  }
+  return y;
+}
+function drawPanelCanvas(){
+  const c=panel.cvs.getContext('2d');const W=680,H=840;const cfg=panel.cfg;
+  const paper=cfg.theme==='paper';
+  c.clearRect(0,0,W,H);
+  if(paper){
+    c.fillStyle='#e6d5ac';c.fillRect(0,0,W,H);
+    c.strokeStyle='#8a6f3d';c.lineWidth=3;c.strokeRect(14,14,W-28,H-28);
+    c.strokeStyle='#c9b88a';c.strokeRect(22,22,W-44,H-44);
+  }else{
+    c.fillStyle='rgba(24,13,5,0.92)';c.fillRect(0,0,W,H);
+    c.strokeStyle='#d9a441';c.lineWidth=4;c.strokeRect(10,10,W-20,H-20);
+  }
+  const ink=paper?'#3a2a12':'#f0dfc0', dim=paper?'#7a6540':'#b98b4e';
+  c.textAlign='center';c.fillStyle=ink;c.font=(paper?'40px':'42px')+' Georgia';
+  c.fillText(cfg.title,W/2,78);
+  let y=118;
+  if(cfg.sub){c.fillStyle=dim;c.font='italic 24px Georgia';c.fillText(cfg.sub,W/2,y);y+=36;}
+  c.textAlign='left';
+  if(cfg.body){
+    c.fillStyle=paper?'#443317':'#e2cfa5';c.font=(paper?'25px':'italic 25px')+' Georgia';
+    y=wrapText(c,cfg.body,52,y+10,W-104,33)+6;
+  }
+  if(cfg.table){
+    c.font='24px Georgia';
+    cfg.table.forEach(row=>{
+      c.fillStyle=row.bad?'#8c2318':(paper?'#3a2a12':'#f0dfc0');
+      c.fillText(row.a,52,y);
+      c.fillText(row.b,300,y);
+      c.fillStyle=dim;c.fillText(row.c||'',480,y);
+      y+=34;
+    });
+    y+=8;
+  }
+  if(cfg.seal){   // the red seal of the Syahbandar
+    c.save();c.translate(W-150,168);c.rotate(-0.12);
+    c.strokeStyle='#a32818';c.lineWidth=6;c.strokeRect(-62,-62,124,124);
+    c.fillStyle='#a32818';c.font='44px Georgia';c.textAlign='center';
+    c.fillText('LULUS',0,-8);c.font='26px Georgia';c.fillText('SYAHBANDAR',0,30);
+    c.restore();c.textAlign='left';
+  }
+  /* option rows */
+  panel.rowRects=[];
+  const rh=84;let ry=H-40-(cfg.options.length*rh);
+  ry=Math.max(ry,y+6);
+  cfg.options.forEach((o,i)=>{
+    const on=o.enabled===undefined?true:!!o.enabled;
+    const hov=(i===panel.hover)&&on;
+    if(hov){c.fillStyle=paper?'rgba(138,40,24,0.10)':'rgba(217,164,65,0.18)';
+      c.fillRect(36,ry,W-72,rh-12);}
+    c.strokeStyle=hov?(paper?'#a32818':'#d9a441'):(paper?'#a89468':'#6b4a24');
+    c.lineWidth=2;c.strokeRect(36,ry,W-72,rh-12);
+    c.fillStyle=on?ink:(paper?'#a89468':'#6b5a42');
+    c.font='28px Georgia';c.fillText(o.label,58,ry+38);
+    if(o.right){c.textAlign='right';c.fillStyle=on?(paper?'#a32818':'#d9a441'):'#6b5a42';
+      c.fillText(o.right,W-58,ry+38);c.textAlign='left';}
+    if(o.sub){c.fillStyle=dim;c.font='italic 19px Georgia';c.fillText(o.sub,58,ry+64);c.font='28px Georgia';}
+    panel.rowRects.push({y0:ry,y1:ry+rh-12,idx:i});
+    ry+=rh;
+  });
+  c.textAlign='center';c.font='italic 19px Georgia';c.fillStyle=paper?'#8a6f3d':'#8a6f4d';
+  c.fillText('look at a line · E or trigger',W/2,H-26);c.textAlign='left';
+  panel.tex.needsUpdate=true;
+}
+function panelActivate(i){
+  const o=panel.cfg&&panel.cfg.options[i];if(!o)return;
+  const on=o.enabled===undefined?true:!!o.enabled;
+  if(!on){gong(120,0.08,0.5);return;}
+  o.pick();
+}
+
+/* =========================================================================
+   CONTENT — dialogues, manifests, the ledger
+   ========================================================================= */
+function closeRow(label='Selesai — step back'){return{label,pick:closePanel};}
+
+function talkMentor(){
+  if(!Q.briefed){
+    showPanel({title:'Tuan Karim',sub:'Syahbandar of Melaka',
+      body:'“So. My new apprentice. Three foreign ships rode in on the dawn tide — a Ming junk at Dock I, an Arab dhow at Dock II, and a jong from Jawa at the T-head.\n\nWalk the piers. Read their manifests. Solve what needs solving, stamp what deserves the stamp, and collect the Sultan\'s tariff. Your ledger will remember what you forget.”',
+      options:[
+        {label:'Take up the ledger',right:'begin',sub:'Tab / grip opens it anywhere',
+          pick:()=>{Q.briefed=true;Q.startTime=performance.now();renderHUD();
+            toast('The morning\'s work is written in your ledger.');gong(SLENDRO[2],0.2);closePanel();}},
+      ]});
+  }else if(approvedCount()<3){
+    showPanel({title:'Tuan Karim',sub:'Syahbandar of Melaka',
+      body:'“'+(approvedCount()===0?'Still here? The tide waits for no clerk.':'Good. Keep at it — the harbor sleeps only when the ledger is full.')+'”',
+      options:[{label:'Open the ledger',pick:openLedger},closeRow()]});
+  }else{
+    showPanel({title:'Tuan Karim',sub:'Syahbandar of Melaka',
+      body:'“All three, stamped and squared. Perhaps you were worth taking on after all. Listen — the drum. The day is done.”',
+      options:[closeRow('Watch the sunset')]});
+  }
+}
+
+function openLedger(){
+  const rows=Object.values(SHIPS).map(s=>({
+    a:s.dock+' · '+s.ship, b:s.captain,
+    c:(s.status==='approved'?'✓ stamped · '+s.tariff+' ◉':'pending'),
+  }));
+  const noteLines=state.notes.slice(-4).map(n=>'· '+n).join('\n')||'· (no notes yet)';
+  showPanel({theme:'paper',title:'THE LEDGER',sub:'Melaka · one morning · tariffs '+state.gold+' ◉',
+    table:rows,
+    body:'Notes:\n'+noteLines,
+    options:[closeRow('Close the ledger')]});
+  gong(SLENDRO[0],0.08,0.6);
+}
+
+/* ---- Dock I · the Chinese junk ---- */
+function talkZheng(){
+  const s=SHIPS.junk;
+  if(s.status==='approved'){
+    showPanel({title:'Captain Zheng',sub:'junk Fu Chun · Ming',
+      body:'“A clean stamp and an honest tariff. Melaka is why we sail. Ten thousand blessings on your ledger.”',
+      options:[closeRow()]});return;
+  }
+  showPanel({title:'Captain Zheng',sub:'junk Fu Chun · Ming',
+    body:'“Porcelain of Jingdezhen, silk, tea — three monsoons at sea and not one piece cracked. My manifest is yours, apprentice. Read it and let an honest man trade.”',
+    options:[
+      {label:'Inspect the manifest',right:'read',pick:()=>manifestJunk()},
+      closeRow()]});
+}
+function manifestJunk(){
+  const s=SHIPS.junk;
+  const table=s.cargo.map(r=>({a:r[0],b:r[1],c:r[2]}));
+  const opts=[];
+  if(Q.event==='spices'&&!Q.eventDone){
+    table.push({a:'Nutmeg (unlisted)',b:'1 chest',c:'— found in hold —',bad:true});
+    opts.push({label:'Levy a fine for the unlisted chest',right:'+6 ◉',
+      sub:'the law of the port, evenly applied',
+      pick:()=>{Q.eventDone=true;state.gold+=6;
+        note('Fined the Fu Chun 6 ◉ — one chest of nutmeg, unlisted.');
+        toast('Zheng pays without argument. “A fair officer. Rare.”');
+        gong(SLENDRO[3],0.2);manifestJunk();}});
+    opts.push({label:'Let it pass, this once',sub:'a favour is also a currency',
+      pick:()=>{Q.eventDone=true;
+        note('Waved through an unlisted chest of nutmeg. Zheng owes a favour.');
+        toast('Zheng inclines his head a fraction. Nothing is said.');
+        manifestJunk();}});
+  }
+  const canStamp=!(Q.event==='spices'&&!Q.eventDone);
+  opts.push({label:'Stamp & approve · collect tariff',right:s.tariff+' ◉',enabled:canStamp,
+    sub:canStamp?'the cargo matches the paper':'resolve the unlisted chest first',
+    pick:()=>approveShip('junk')});
+  opts.push(closeRow('Set the paper down'));
+  showPanel({theme:'paper',title:'MANIFEST · FU CHUN',sub:'Dock I · Captain Zheng · Ming',
+    table,seal:s.status==='approved',options:opts});
+}
+
+/* ---- Dock II · the Arab dhow ---- */
+function talkRashid(){
+  const s=SHIPS.dhow;
+  if(s.status==='approved'){
+    showPanel({title:'Nakhoda Rashid',sub:'dhow Al-Manṣūra',
+      body:'“You went and found them yourself. In Hormuz the harbourmaster would have found a fine instead. Melaka deserves its name.”',
+      options:[closeRow()]});return;
+  }
+  if(Q.dhowStage==='foundBales'){
+    showPanel({title:'Nakhoda Rashid',sub:'dhow Al-Manṣūra',
+      body:'“In the warehouse? Those porters of the dawn shift — may their tea always be cold. So the count stands at forty. Alḥamdulillāh. The manifest is true, apprentice.”',
+      options:[{label:'Inspect the manifest',right:'read',pick:manifestDhow},closeRow()]});
+    return;
+  }
+  if(Q.dhowStage==='moored'){
+    showPanel({title:'Nakhoda Rashid',sub:'dhow Al-Manṣūra · Mariam interprets',
+      body:'Mariam listens, then turns to you: “The nakhoda says his cargo is delayed — the count on deck does not match his paper, and he will not swear a false manifest. He asks you to see it with your own eyes.”',
+      options:[{label:'Inspect the manifest',right:'read',pick:manifestDhow},closeRow()]});
+  }else{
+    showPanel({title:'Nakhoda Rashid',sub:'dhow Al-Manṣūra',
+      body:'Mariam: “Eight bales short, and he will not stamp a lie. He unloaded at first light — perhaps the shore crews know where cargo wanders at dawn.”',
+      options:[closeRow()]});
+  }
+}
+function manifestDhow(){
+  const s=SHIPS.dhow;
+  const short=(Q.dhowStage!=='foundBales'&&s.status!=='approved');
+  const table=[
+    {a:'Cotton',b:short?'32 of 40 bales':'40 bales',c:'Gujarat',bad:short},
+    {a:'Frankincense',b:'6 chests',c:'Ḥaḍramawt'},
+    {a:'Dates',b:'20 sacks',c:'Baṣra'},
+  ];
+  const opts=[];
+  if(short&&Q.dhowStage==='moored'){
+    opts.push({label:'Question the count',sub:'eight bales are missing',
+      pick:()=>{Q.dhowStage='mismatch';renderHUD();
+        toast('Eight bales of cotton, gone between ship and shore.');
+        talkRashid();}});
+  }
+  opts.push({label:'Stamp & approve · collect tariff',right:s.tariff+' ◉',
+    enabled:!short,
+    sub:short?'the count is short — you cannot stamp this':'forty bales, all found',
+    pick:()=>approveShip('dhow')});
+  opts.push(closeRow('Set the paper down'));
+  showPanel({theme:'paper',title:'MANIFEST · AL-MANṢŪRA',sub:'Dock II · Nakhoda Rashid',
+    table,seal:s.status==='approved',options:opts});
+}
+
+/* ---- Dock III · the Malay jong ---- */
+function talkMegat(){
+  const s=SHIPS.jong;
+  if(s.status==='approved'){
+    showPanel({title:'Nakhoda Megat',sub:'jong Sri Gunung',
+      body:'“The crew is aloft and the stick will hold to Pasai and back. You kept a jong of the Sultan\'s trade in the water today, budak. That is syahbandar\'s work.”',
+      options:[closeRow()]});return;
+  }
+  if(Q.jongStage==='moored'){
+    showPanel({title:'Nakhoda Megat',sub:'jong Sri Gunung',
+      body:'“Look at her. The winds off Pulau Sembilan cracked my mainmast like a green bamboo. I cannot warp to a berth, cannot unload tin, cannot pay tariff — not without carpenters. Find me hands, apprentice, and Melaka has my thirty ingots.”',
+      options:[{label:'“I\'ll find you a crew.”',pick:()=>{Q.jongStage='needCrew';renderHUD();
+        toast('The foreman, Pak Awang, keeps the shore crews.');closePanel();}},
+        closeRow()]});
+  }else if(Q.jongStage==='crewSent'){
+    showPanel({title:'Nakhoda Megat',sub:'jong Sri Gunung',
+      body:'“I heard the bell — and here they come down the pier with adzes and good timber. You move fast for a man of paper. The manifest, then, and gladly.”',
+      options:[{label:'Inspect the manifest',right:'read',pick:manifestJong},closeRow()]});
+  }else{
+    showPanel({title:'Nakhoda Megat',sub:'jong Sri Gunung',
+      body:'“No crew yet. The mast will not mend itself, and the tide is not sentimental.”',
+      options:[closeRow()]});
+  }
+}
+function manifestJong(){
+  const s=SHIPS.jong;
+  showPanel({theme:'paper',title:'MANIFEST · SRI GUNUNG',sub:'Dock III · Nakhoda Megat',
+    table:s.cargo.map(r=>({a:r[0],b:r[1],c:r[2]})),
+    seal:s.status==='approved',
+    options:[
+      {label:'Stamp & approve · collect tariff',right:s.tariff+' ◉',
+        enabled:Q.jongStage==='crewSent',
+        sub:Q.jongStage==='crewSent'?'repairs underway — she can berth':'she cannot berth until the mast is seen to',
+        pick:()=>approveShip('jong')},
+      closeRow('Set the paper down')]});
+}
+
+/* ---- shore NPCs ---- */
+function talkForeman(){
+  const opts=[];let body;
+  if(Q.dhowStage==='mismatch'){
+    body='“Missing cotton? Ha — the Gujarati porters on the dawn shift stacked eight bales in my gudang before anyone with eyes was awake. Marked with a house sigil, crescent over a ship. Go and see for yourself.”';
+    opts.push({label:'“I\'ll check the warehouse.”',
+      pick:()=>{Q.dhowStage='askForeman';renderHUD();closePanel();
+        toast('The bales should be in the gudang, west of the office.');}});
+  }else if(Q.jongStage==='needCrew'){
+    body='“The jong with the cracked stick? My carpenters are scattered across the yards — but every crew in this port answers the harbor bell. Ring it at the jetty mouth and they\'ll muster. That\'s what it\'s for, apprentice.”';
+    opts.push({label:'“Then I\'ll ring it.”',
+      pick:()=>{Q.jongStage='toldBell';renderHUD();closePanel();
+        toast('The bronze bell stands at the mouth of the jetty.');}});
+  }else{
+    body='“Crates in, crates out, and the sun not even high. If cargo goes wandering or a ship needs hands, I\'m the one who knows. That\'s the whole job.”';
+  }
+  /* the foreman handles both threads — show whichever applies, plus the other if pending */
+  if(Q.jongStage==='needCrew'&&Q.dhowStage==='mismatch'&&opts.length===1){
+    opts.push({label:'“And the jong needs carpenters.”',
+      pick:()=>{Q.jongStage='toldBell';renderHUD();closePanel();
+        toast('Ring the harbor bell to muster the crews.');}});
+  }
+  opts.push(closeRow());
+  showPanel({title:'Pak Awang',sub:'dock foreman',body,options:opts});
+}
+function talkInterp(){
+  showPanel({title:'Mariam',sub:'interpreter · Melaka',
+    body:'“Four languages before breakfast, some days. Arabic for the nakhoda, Hokkien at Dock I, Jawa at the T-head, and Malay for everything that matters. In this port, the word IS the cargo.”',
+    options:[closeRow()]});
+}
+function talkRos(){
+  const opts=[];
+  let body='“Kopi, apprentice? First cup free for the Syahbandar\'s office — the rest of you pay like sailors.”';
+  if(Q.event==='dues'&&!Q.eventDone){
+    body='“Kopi? …Ah. You\'ve seen the ledger, then. Yes, yes — four coins of berth dues, late since the last moon. Business has been slow, sayang.”';
+    opts.push({label:'Collect the late dues',right:'+4 ◉',sub:'the port runs on what it is owed',
+      pick:()=>{Q.eventDone=true;state.gold+=4;note('Collected 4 ◉ late berth dues from the coffee stall.');
+        toast('Kak Ros counts out four coins, and pours you a kopi anyway.');
+        Q.coffee=true;gong(SLENDRO[3],0.18);closePanel();}});
+    opts.push({label:'Forgive them until the next moon',sub:'mercy is also policy',
+      pick:()=>{Q.eventDone=true;note('Deferred the coffee stall\'s berth dues to next moon.');
+        toast('“The Syahbandar chose well with you.” The kopi is very sweet.');
+        Q.coffee=true;closePanel();}});
+  }else if(!Q.coffee){
+    opts.push({label:'Drink the kopi',sub:'thick, sweet, half sludge — perfect',
+      pick:()=>{Q.coffee=true;toast('The kopi hits like a following wind. The morning sharpens.');
+        gong(SLENDRO[1],0.1,0.7);closePanel();}});
+  }
+  opts.push(closeRow());
+  showPanel({title:'Kak Ros',sub:'the coffee stall',body,options:opts});
+}
+
+/* ---- approval / tariff / ending ---- */
+function approveShip(key){
+  const s=SHIPS[key];
+  if(s.status==='approved')return;
+  s.status='approved';state.gold+=s.tariff;
+  note('Stamped the '+s.ship+' — tariff '+s.tariff+' ◉ collected.');
+  stampSound();setTimeout(()=>gong(SLENDRO[4],0.2),180);
+  renderHUD();
+  /* redraw as stamped */
+  if(key==='junk')manifestJunk();else if(key==='dhow')manifestDhow();else manifestJong();
+  toast('The seal bites the paper. '+s.ship+' — approved.');
+  if(approvedCount()===3)setTimeout(beginSunset,2500);
+}
+
+/* interactable props */
+function useBell(){
+  bellSound();
+  if(Q.jongStage==='toldBell'){
+    Q.jongStage='crewSent';renderHUD();
+    toast('The bell\'s voice rolls down the pier. Crews look up all along the shore.');
+    /* the repair crew sets out for the T-head */
+    crew=[];
+    for(let i=0;i<2;i++){
+      const g=ambient(1.5-i,26-i*1.5,0);
+      crew.push({g,path:[V3(1.5-i,0,26-i*1.5),V3(0.5-i*1.2,0,-41-i)],seg:0,t:0,speed:1.4});
+    }
+  }else{
+    toast('Bronze over water. Half the harbor glances your way.');
+  }
+}
+function useBales(){
+  if(Q.dhowStage==='askForeman'){
+    Q.dhowStage='foundBales';renderHUD();
+    toast('Eight bales, crescent-and-ship sigil — Rashid\'s cotton, safe and dry.');
+    gong(SLENDRO[2],0.15);
+  }else{
+    toast('Cotton bales, warehouse-stacked. Someone\'s dawn delivery.');
+  }
+}
+function useBrokenCrate(){
+  if(!Q.eventDone){
+    Q.eventDone=true;
+    note('Logged one crate of porcelain, cracked on the jetty. Loss recorded.');
+    toast('Shards of Ming blue on the planks. You write the loss into the ledger.');
+  }else toast('The swept-up shards glitter like the strait at noon.');
+}
+function feedChickens(){
+  Q.chickensFed=true;
+  toast('You scatter a handful of rice. Immediate, total poultry consensus.');
+  if(AC){gong(SLENDRO[4],0.06,0.4);setTimeout(()=>gong(SLENDRO[3],0.05,0.4),120);}
+  chickens.forEach(ch=>{ch.userData.tgt.copy(dolly.position)
+    .add(V3(rand(-1,1),0,rand(-1,1)));ch.userData.tgt.y=DOCK_Y;ch.userData.wait=0;});
+}
+
+/* =========================================================================
+   INTERACTABLES
+   ========================================================================= */
+const interactables=[
+  {node:()=>npcs.mentor, r:3.0, label:()=>'speak with Tuan Karim', act:talkMentor},
+  {node:()=>npcs.foreman,r:3.0, label:()=>'speak with Pak Awang', act:talkForeman},
+  {node:()=>npcs.zheng,  r:3.0, label:()=>'hail Captain Zheng', act:talkZheng, need:()=>Q.briefed},
+  {node:()=>npcs.rashid, r:3.0, label:()=>'hail Nakhoda Rashid', act:talkRashid, need:()=>Q.briefed},
+  {node:()=>npcs.interp, r:2.6, label:()=>'speak with Mariam', act:talkInterp},
+  {node:()=>npcs.megat,  r:3.0, label:()=>'hail Nakhoda Megat', act:talkMegat, need:()=>Q.briefed},
+  {node:()=>npcs.ros,    r:2.8, label:()=>'the coffee stall', act:talkRos},
+  {node:()=>bellGroup,   r:2.4, label:()=>'ring the harbor bell', act:useBell},
+  {node:()=>baleStack,   r:2.8, label:()=>Q.dhowStage==='askForeman'?'search the bales':'cotton bales', act:useBales},
+  {node:()=>chickens[0], r:2.2, label:()=>'scatter grain for the chickens', act:feedChickens},
+];
+if(brokenCrate)interactables.push({node:()=>brokenCrate,r:2.4,label:()=>'a broken crate',act:useBrokenCrate});
+
+/* =========================================================================
+   INPUT — pointer lock / drag fallback / VR
+   ========================================================================= */
+const keys={};
+let yaw=Math.PI*0.55,pitchA=0,started=false,inVR=false;
+addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(!started)return;
+  if(e.code==='KeyE'&&!inVR)interactPressed();
+  if(e.code==='Tab'||e.code==='KeyB'){e.preventDefault();
+    if(panel.open)closePanel();else if(Q.briefed)openLedger();}
+  if(e.code==='Escape')closePanel();
+});
+addEventListener('keyup',e=>keys[e.code]=false);
+
+function applyLook(dx,dy){
+  yaw-=dx*0.0022;pitchA-=dy*0.0022;
+  pitchA=Math.max(-1.35,Math.min(1.35,pitchA));
+  dolly.rotation.y=yaw;pitch.rotation.x=pitchA;
+}
+function tryLock(){
+  try{const p=renderer.domElement.requestPointerLock();if(p&&p.catch)p.catch(()=>{});}catch(_){}
+}
+let dragging=false,dragMoved=0,lastMX=0,lastMY=0,lockHinted=false;
+document.addEventListener('pointerlockerror',()=>{
+  if(!lockHinted){lockHinted=true;toast('Pointer lock unavailable here — drag to look around.');}
+});
+renderer.domElement.style.touchAction='none';
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(!started||inVR)return;
+  if(document.pointerLockElement===renderer.domElement){interactPressed();return;}
+  dragging=true;dragMoved=0;lastMX=e.clientX;lastMY=e.clientY;
+  if(e.pointerType==='mouse')tryLock();
+  try{renderer.domElement.setPointerCapture(e.pointerId);}catch(_){}
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+  if(!started||inVR)return;
+  if(document.pointerLockElement===renderer.domElement)return;
+  if(!dragging)return;
+  const dx=e.clientX-lastMX,dy=e.clientY-lastMY;
+  lastMX=e.clientX;lastMY=e.clientY;
+  dragMoved+=Math.abs(dx)+Math.abs(dy);
+  applyLook(dx*1.7,dy*1.7);
+});
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!started||inVR){dragging=false;return;}
+  if(dragging&&dragMoved<6&&document.pointerLockElement!==renderer.domElement)interactPressed();
+  dragging=false;
+  try{renderer.domElement.releasePointerCapture(e.pointerId);}catch(_){}
+});
+addEventListener('mousemove',e=>{
+  if(document.pointerLockElement!==renderer.domElement||inVR)return;
+  applyLook(e.movementX,e.movementY);
+});
+
+function onWalk(x,z,m=0.35){
+  return walkables.some(w=>x>w.x1+m&&x<w.x2-m&&z>w.z1+m&&z<w.z2-m);
+}
+function tryMove(dx,dz){
+  const p=dolly.position;
+  if(onWalk(p.x+dx,p.z+dz)){p.x+=dx;p.z+=dz;}
+  else if(onWalk(p.x+dx,p.z))p.x+=dx;
+  else if(onWalk(p.x,p.z+dz))p.z+=dz;
+}
+
+const ctl0=renderer.xr.getController(0),ctl1=renderer.xr.getController(1);
+[ctl0,ctl1].forEach(c=>{
+  const line=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([V3(0,0,0),V3(0,0,-4)]),
+    new THREE.LineBasicMaterial({color:0xd9a441,transparent:true,opacity:.5}));
+  c.add(line);dolly.add(c);
+  c.addEventListener('selectstart',interactPressed);
+  c.addEventListener('squeezestart',()=>{
+    if(panel.open)closePanel();else if(Q.briefed)openLedger();});
+});
+let snapCooldown=0;
+
+const raycaster=new THREE.Raycaster();
+let nearThing=null;
+function aimRay(){
+  if(inVR){
+    const m=new THREE.Matrix4().extractRotation(ctl1.matrixWorld);
+    raycaster.set(new THREE.Vector3().setFromMatrixPosition(ctl1.matrixWorld),
+      new THREE.Vector3(0,0,-1).applyMatrix4(m).normalize());
+  }else raycaster.setFromCamera({x:0,y:0},camera);
+  return raycaster;
+}
+function interactPressed(){
+  if(panel.open){if(panel.hover>=0)panelActivate(panel.hover);return;}
+  if(nearThing)nearThing.act();
+}
+
+/* =========================================================================
+   START / VR / SUNSET / END
+   ========================================================================= */
+const card=document.getElementById('card');
+document.getElementById('btnStart').addEventListener('click',()=>{begin(false);tryLock();});
+if(navigator.xr&&navigator.xr.isSessionSupported){
+  navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
+    if(ok)document.getElementById('btnVR').style.display='';
+  }).catch(()=>{});
+}
+document.getElementById('btnVR').addEventListener('click',async()=>{
+  try{
+    const session=await navigator.xr.requestSession('immersive-vr',
+      {optionalFeatures:['local-floor','bounded-floor']});
+    session.addEventListener('end',()=>{inVR=false;vrHud.visible=false;chEl.style.display='';});
+    await renderer.xr.setSession(session);
+    inVR=true;pitch.rotation.x=0;pitch.position.y=0;
+    vrHud.visible=true;chEl.style.display='none';
+    begin(true);
+  }catch(e){toast('Could not start VR: '+e.message);}
+});
+function begin(vr){
+  if(started){card.classList.add('hidden');return;}
+  started=true;initAudio();
+  card.classList.add('hidden');
+  hudEl.style.display='block';objEl.style.display='block';
+  if(!vr)chEl.style.display='block';
+  renderHUD();
+  gong(SLENDRO[0],0.18);setTimeout(()=>gong(SLENDRO[2],0.14),300);
+  toast('Morning over the strait. The Syahbandar is waiting.');
+}
+
+let dusk=0,duskT=-1;
+function beginSunset(){
+  if(duskT>=0)return;
+  duskT=0;
+  toast('The last stamp of the day. The sun leans toward Sumatra.');
+}
+function showEndCard(){
+  const mins=Math.max(1,Math.round((performance.now()-Q.startTime)/60000));
+  const notes=state.notes.map(n=>'· '+n).join('<br>');
+  document.getElementById('endstats').innerHTML=
+    `<b>Ships processed</b> — 3 of 3<br>
+     <b>Tariffs collected</b> — ${state.gold} ◉<br>
+     <b>The morning took</b> — about ${mins} minute${mins>1?'s':''}<br><br>
+     <span style="font-size:13px">${notes}</span>`;
+  document.getElementById('endfoot').textContent=
+    'MALACCA · PORT OF THE WINDS — VERTICAL SLICE COMPLETE';
+  document.getElementById('endcard').classList.remove('hidden');
+  if(document.pointerLockElement)document.exitPointerLock();
+}
+
+/* =========================================================================
+   MAIN LOOP
+   ========================================================================= */
+const clock=new THREE.Clock();
+const tmpV=new THREE.Vector3();
+let beduked=false,ended=false;
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),0.05),t=clock.elapsedTime;
+
+  waterUniforms.time.value=t;
+  clothMats.forEach(m=>m.uniforms.time.value=t);
+
+  /* sunset drive */
+  if(duskT>=0&&dusk<1){
+    duskT+=dt;dusk=Math.min(1,duskT/34);
+    skyMat.uniforms.dusk.value=dusk;
+    waterUniforms.dusk.value=dusk;
+    const el=0.30-(0.30-0.055)*dusk;
+    SUN_DIR.set(-0.32-0.25*dusk,el,-0.90).normalize();
+    sun.color.setHSL(0.075-0.02*dusk,0.85,0.62-0.1*dusk);
+    sun.intensity=2.6-1.1*dusk;
+    hemi.intensity=0.55-0.3*dusk;
+    renderer.toneMappingExposure=1.12+0.12*dusk;
+    const fc=new THREE.Color(0xe2a76b).lerp(new THREE.Color(0xc96a3a),dusk);
+    scene.fog.color.copy(fc);
+    waterUniforms.fogColor.value.copy(fc);
+    clothMats.forEach(m=>m.uniforms.fogColor.value.copy(fc));
+    flickerLights.forEach(l=>l.distance=7+5*dusk);
+    if(dusk>0.55&&!beduked){beduked=true;beduk();
+      toast('From the hill: the beduk, slow, then quickening. Maghrib.');}
+    if(dusk>=1&&!ended){ended=true;setTimeout(showEndCard,4500);
+      SLENDRO.forEach((f,k)=>setTimeout(()=>gong(f,0.16,2.2),k*300));}
+  }
+
+  /* desktop movement */
+  if(started&&!inVR&&!panel.open){
+    const sp=(keys['ShiftLeft']?4.6:2.7)*dt;
+    let fx=0,fz=0;
+    if(keys['KeyW'])fz-=1;if(keys['KeyS'])fz+=1;
+    if(keys['KeyA'])fx-=1;if(keys['KeyD'])fx+=1;
+    if(fx||fz){
+      const len=Math.hypot(fx,fz);fx/=len;fz/=len;
+      const s=Math.sin(yaw),c=Math.cos(yaw);
+      tryMove((fx*c+fz*s)*sp,(fz*c-fx*s)*sp);
+    }
+  }
+  if(!inVR){
+    const moving=keys['KeyW']||keys['KeyA']||keys['KeyS']||keys['KeyD'];
+    pitch.position.y=1.65+(moving?Math.sin(t*8.2)*0.028:0);
+  }
+
+  /* VR locomotion */
+  if(inVR&&renderer.xr.getSession()){
+    snapCooldown-=dt;
+    for(const src of renderer.xr.getSession().inputSources){
+      if(!src.gamepad)continue;
+      const ax=src.gamepad.axes;
+      const x=ax[2]??ax[0]??0,y=ax[3]??ax[1]??0;
+      if(src.handedness==='left'&&(Math.abs(x)>.15||Math.abs(y)>.15)&&!panel.open){
+        camera.getWorldDirection(tmpV);tmpV.y=0;tmpV.normalize();
+        const right=V3(-tmpV.z,0,tmpV.x);
+        const sp=2.4*dt;
+        tryMove((tmpV.x*-y+right.x*x)*sp,(tmpV.z*-y+right.z*x)*sp);
+      }
+      if(src.handedness==='right'&&Math.abs(x)>.6&&snapCooldown<=0){
+        dolly.rotation.y-=Math.sign(x)*Math.PI/4;snapCooldown=0.32;
+      }
+    }
+  }
+
+  /* nearest interactable + prompt */
+  nearThing=null;
+  if(started&&!panel.open&&!ended){
+    let best=1e9;
+    for(const it of interactables){
+      if(it.need&&!it.need())continue;
+      const n=it.node();if(!n)continue;
+      const d=Math.hypot(n.position.x-dolly.position.x,n.position.z-dolly.position.z);
+      if(d<it.r&&d<best){best=d;nearThing=it;}
+    }
+    if(nearThing&&!inVR){
+      promptEl.style.display='block';
+      promptEl.textContent='E — '+nearThing.label();
+    }else promptEl.style.display='none';
+  }else promptEl.style.display='none';
+
+  /* panel hover via ray, using the drawn row rects */
+  if(panel.open){
+    const hit=aimRay().intersectObject(panel.mesh)[0];
+    let h=-1;
+    if(hit){
+      const py=(1-hit.uv.y)*840;
+      for(const r of panel.rowRects)if(py>=r.y0&&py<=r.y1){h=r.idx;break;}
+    }
+    if(h!==panel.hover){panel.hover=h;drawPanelCanvas();}
+    const head=new THREE.Vector3();camera.getWorldPosition(head);
+    if(panel.group.position.distanceTo(head)>2.8)closePanel();
+  }
+
+  /* idle life */
+  for(const id in npcs){
+    const m=npcs[id];
+    m.position.y=DOCK_Y+Math.sin(t*1.6+m.userData.bob)*0.015;
+  }
+  ambients.forEach(m=>{m.position.y=DOCK_Y+Math.sin(t*1.5+m.userData.bob)*0.015;});
+  walkers.forEach(w=>{
+    const a=w.pts[w.seg],b=w.pts[(w.seg+1)%w.pts.length];
+    const L=a.distanceTo(b);
+    w.t+=dt*w.speed/L;
+    if(w.t>=1){w.t=0;w.seg=(w.seg+1)%w.pts.length;}
+    const a2=w.pts[w.seg],b2=w.pts[(w.seg+1)%w.pts.length];
+    w.g.position.lerpVectors(a2,b2,w.t);w.g.position.y=DOCK_Y+Math.sin(t*6)*0.01;
+    w.g.rotation.y=Math.atan2(b2.x-a2.x,b2.z-a2.z);
+  });
+  if(crew)crew.forEach(w=>{
+    if(w.seg>=w.path.length-1)return;
+    const a=w.path[w.seg],b=w.path[w.seg+1];
+    const L=a.distanceTo(b);
+    w.t+=dt*w.speed/L;
+    if(w.t>=1){w.t=0;w.seg++;if(w.seg>=w.path.length-1){w.g.position.copy(b);w.g.position.y=DOCK_Y;return;}}
+    const a2=w.path[w.seg],b2=w.path[Math.min(w.seg+1,w.path.length-1)];
+    w.g.position.lerpVectors(a2,b2,w.t);w.g.position.y=DOCK_Y;
+    w.g.rotation.y=Math.atan2(b2.x-a2.x,b2.z-a2.z);
+  });
+
+  /* chickens peck and wander */
+  chickens.forEach(ch=>{
+    const u=ch.userData;
+    u.wait-=dt;
+    const d=ch.position.distanceTo(u.tgt);
+    if(d>0.05){
+      tmpV.copy(u.tgt).sub(ch.position).normalize().multiplyScalar(dt*0.8);
+      ch.position.add(tmpV);
+      ch.rotation.y=Math.atan2(tmpV.x,tmpV.z);
+      ch.position.y=DOCK_Y+Math.abs(Math.sin(t*14))*0.03;
+    }else if(u.wait<=0){
+      u.tgt.copy(u.home).add(V3(rand(-1.6,1.6),0,rand(-1.6,1.6)));u.tgt.y=DOCK_Y;
+      u.wait=rand(1.5,4);
+    }else ch.position.y=DOCK_Y+Math.abs(Math.sin(t*9+u.wait))*0.015; // pecking
+  });
+
+  /* the fleet rides the same wave field as the water shader */
+  function seaY(x,z){
+    return 0.30*Math.sin((x*0.9+z*0.35)*0.28+t*0.9)+
+           0.13*Math.sin((-x*0.6+z*0.75)*0.55+t*1.4);
+  }
+  anchored.forEach(s=>{
+    s.position.y=seaY(s.position.x,s.position.z)*0.45;
+    s.rotation.z=Math.sin(t*0.5+s.userData.bobPhase)*0.02;
+    s.rotation.x=Math.sin(t*0.38+s.userData.bobPhase)*0.015;
+  });
+  sampans.forEach(s=>{
+    s.position.y=seaY(s.position.x,s.position.z)*0.7;
+    s.rotation.z=Math.sin(t*0.8+s.userData.bobPhase)*0.06;
+  });
+
+  /* bell swing decay */
+  if(bellSwing>0){
+    bellSwing=Math.max(0,bellSwing-dt*0.5);
+    bellGroup.userData.bell.rotation.x=Math.sin(t*9)*0.22*bellSwing;
+  }
+
+  gulls.forEach(g=>{
+    const u=g.userData;u.ph+=dt*u.sp;
+    g.position.set(u.cx+Math.cos(u.ph)*u.r0,u.h+Math.sin(u.ph*2.3)*1.5,u.cz+Math.sin(u.ph)*u.r0);
+    g.rotation.y=-u.ph+Math.PI/2;
+    const flap=Math.sin(t*7+u.ph*13)*0.7;
+    u.l.rotation.y=flap*0.6;u.r.rotation.y=-flap*0.6;
+  });
+
+  flickerLights.forEach((l,i)=>l.intensity=(0.75+0.9*dusk)+Math.sin(t*9+i*2.1)*0.12+Math.sin(t*23+i)*0.06);
+
+  sun.target.position.set(dolly.position.x,0,dolly.position.z);
+  sun.position.copy(SUN_DIR).multiplyScalar(140).add(sun.target.position);
+
+  if(vrHudNeedsRedraw&&inVR){drawVrHud();vrHudNeedsRedraw=false;}
+
+  renderer.render(scene,camera);
+});
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
