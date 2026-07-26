@@ -53,20 +53,41 @@ const MAX_HEALTH = 100;
 const TICK_HZ = 60;
 const BROADCAST_HZ = 20;
 
+// randomize per-round combat temperament so no two bouts move the same way
+function rollTraits(f) {
+  f.aggression = 0.5 + Math.random() * 0.35;    // how eagerly it commits to strikes
+  f.agility = 0.45 + Math.random() * 0.4;       // dodge / parry reflex + footwork speed
+  f.circleDir = Math.random() < 0.5 ? 1 : -1;   // which way it orbits the opponent
+  f.preferredRange = 1.1 + Math.random() * 0.6; // spacing it likes to keep while circling
+  f.decideT = 0.3 + Math.random() * 0.5;        // time to next micro-decision
+  f._reactCd = 0;                               // cooldown between reactive dodges/parries
+  f._dvx = 0; f._dvz = 0;                        // stored dodge burst velocity
+  f._dealt = false;
+}
+
+function placeFighter(f, startAngle) {
+  f.x = Math.cos(startAngle) * (RING_RADIUS - 0.6);
+  f.z = Math.sin(startAngle) * (RING_RADIUS - 0.6);
+  f.angle = startAngle + Math.PI; // face roughly toward center
+  f.health = MAX_HEALTH;
+  f.stamina = 100;
+  f.state = 'idle';
+  f.stateT = 0;
+  f.vx = 0;
+  f.vz = 0;
+  rollTraits(f);
+}
+
 function makeFighter(name, color, startAngle) {
-  return {
+  const f = {
     name,
     color,
-    x: Math.cos(startAngle) * (RING_RADIUS - 0.6),
-    z: Math.sin(startAngle) * (RING_RADIUS - 0.6),
-    angle: startAngle + Math.PI, // face roughly toward center
-    health: MAX_HEALTH,
-    stamina: 100,
-    state: 'idle',   // idle | approach | strike | hurt | strut | victory | defeated
-    stateT: 0,       // seconds remaining in current state
-    vx: 0,
-    vz: 0,
+    // states: idle | circle | approach | feint | dodge | parry | strike |
+    //         recover | hurt | strut | victory | defeated
+    state: 'idle',
   };
+  placeFighter(f, startAngle);
+  return f;
 }
 
 const match = {
@@ -86,17 +107,7 @@ function resetMatch() {
   match.phaseT = 3;
   match.winner = null;
   const angles = [Math.PI, 0];
-  match.fighters.forEach((f, i) => {
-    f.x = Math.cos(angles[i]) * (RING_RADIUS - 0.6);
-    f.z = Math.sin(angles[i]) * (RING_RADIUS - 0.6);
-    f.angle = angles[i] + Math.PI;
-    f.health = MAX_HEALTH;
-    f.stamina = 100;
-    f.state = 'idle';
-    f.stateT = 0;
-    f.vx = 0;
-    f.vz = 0;
-  });
+  match.fighters.forEach((f, i) => placeFighter(f, angles[i]));
 }
 
 function setState(f, state, duration) {
@@ -118,9 +129,21 @@ function clampToRing(f) {
   }
 }
 
+// Slow, occasionally-reversing bias that walks the whole engagement around the
+// ring center so the duel travels the arena instead of parking in one spot.
+let arenaSpin = Math.random() < 0.5 ? 1 : -1;
+let arenaSpinT = 6 + Math.random() * 5;
+
+// Ramps 0 → 1 over the course of a round: fighters tire, evade less and hit
+// harder, so a bout always builds to a finish instead of stalling.
+let fightElapsed = 0;
+let fightIntensity = 0;
+
 function stepFighter(f, foe, dt) {
   f.stateT -= dt;
-  f.stamina = Math.min(100, f.stamina + dt * 6);
+  f.decideT -= dt;
+  f._reactCd -= dt;
+  f.stamina = Math.min(100, f.stamina + dt * 8);
 
   if (f.state === 'defeated') {
     f.vx = f.vz = 0;
@@ -130,26 +153,82 @@ function stepFighter(f, foe, dt) {
   const d = dist(f, foe);
   const toFoe = Math.atan2(foe.z - f.z, foe.x - f.x);
 
-  // smoothly turn to face the opponent
+  // smoothly turn to face the opponent (slower mid-lunge so a strike can be juked)
   let da = toFoe - f.angle;
   while (da > Math.PI) da -= Math.PI * 2;
   while (da < -Math.PI) da += Math.PI * 2;
-  f.angle += da * Math.min(1, dt * 6);
+  const turnRate = f.state === 'strike' ? 3 : 8;
+  f.angle += da * Math.min(1, dt * turnRate);
+
+  // --- reactive defense: dodge or parry a strike/feint coming our way ---
+  // Decide ONCE per incoming threat (on the transition), not every tick — a
+  // strike's active window is many ticks, so a per-tick roll would always evade.
+  // A feint counts as a threat, so it baits (and burns) the defender's reflex.
+  const foeThreat = foe.state === 'strike' || foe.state === 'feint';
+  const newThreat = foeThreat && f._foePrev !== foe.state;
+  f._foePrev = foe.state;
+  const reactable = f.state === 'circle' || f.state === 'approach' ||
+                    f.state === 'feint' || f.state === 'idle';
+  if (newThreat && reactable && f._reactCd <= 0 && d < 1.6) {
+    const roll = Math.random();
+    const evade = 1 - 0.5 * fightIntensity; // reflexes fade as the round wears on
+    if (roll < f.agility * 0.6 * evade && f.stamina > 22) {
+      // sidestep out of the strike line
+      const side = Math.random() < 0.5 ? 1 : -1;
+      const dir = toFoe + (Math.PI / 2) * side;
+      const burst = 3.6;
+      f._dvx = Math.cos(dir) * burst;
+      f._dvz = Math.sin(dir) * burst;
+      setState(f, 'dodge', 0.3);
+      f.stamina -= 16;
+      f._reactCd = 1.0;
+    } else if (roll < (f.agility * 0.6 + 0.2) * evade && f.stamina > 12) {
+      // stand and deflect
+      setState(f, 'parry', 0.4);
+      f.stamina -= 8;
+      f._reactCd = 1.0;
+    }
+    // otherwise: no reflex this time — the strike will land
+  }
 
   switch (f.state) {
     case 'strike': {
-      // lunge forward during the strike window
-      const lunge = 3.2;
+      const lunge = 3.5;
       f.vx = Math.cos(f.angle) * lunge;
       f.vz = Math.sin(f.angle) * lunge;
-      if (f.stateT <= 0) setState(f, 'idle', 0.25 + Math.random() * 0.2);
+      if (f.stateT <= 0) setState(f, 'recover', 0.26);
+      break;
+    }
+    case 'recover': {
+      // brief vulnerable settle after a strike
+      f.vx *= 0.8; f.vz *= 0.8;
+      if (f.stateT <= 0) setState(f, 'circle', 0.2);
       break;
     }
     case 'hurt': {
-      // knocked backward
-      f.vx *= 0.86;
-      f.vz *= 0.86;
-      if (f.stateT <= 0) setState(f, 'idle', 0.15);
+      f.vx *= 0.86; f.vz *= 0.86;
+      if (f.stateT <= 0) setState(f, 'circle', 0.2);
+      break;
+    }
+    case 'dodge': {
+      f.vx = f._dvx; f.vz = f._dvz;
+      f._dvx *= 0.86; f._dvz *= 0.86;
+      if (f.stateT <= 0) setState(f, 'circle', 0.15);
+      break;
+    }
+    case 'parry': {
+      // plant and give a little ground
+      f.vx = -Math.cos(f.angle) * 0.5;
+      f.vz = -Math.sin(f.angle) * 0.5;
+      if (f.stateT <= 0) setState(f, 'circle', 0.2);
+      break;
+    }
+    case 'feint': {
+      // fake a lunge in, then pull back out — baits a dodge/parry
+      const s = f.stateT > 0.12 ? 2.2 : -1.6;
+      f.vx = Math.cos(f.angle) * s;
+      f.vz = Math.sin(f.angle) * s;
+      if (f.stateT <= 0) setState(f, 'circle', 0.25);
       break;
     }
     case 'strut':
@@ -157,33 +236,55 @@ function stepFighter(f, foe, dt) {
       f.vx = f.vz = 0;
       break;
     }
+    case 'circle':
     case 'approach':
     case 'idle':
     default: {
-      if (d > 0.95) {
-        // close the distance, with a little sidestep juke
-        const juke = Math.sin(Date.now() * 0.003 + f.x) * 0.5;
-        const dir = f.angle + juke * 0.4;
-        const speed = 1.15;
-        f.vx = Math.cos(dir) * speed;
-        f.vz = Math.sin(dir) * speed;
-        if (f.state !== 'approach') setState(f, 'approach', 0.5);
-      } else {
-        f.vx *= 0.7;
-        f.vz *= 0.7;
-        // in range: maybe strike
-        if (f.stateT <= 0 && f.stamina > 25 && Math.abs(da) < 0.6) {
-          if (Math.random() < 0.65) {
-            setState(f, 'strike', 0.28);
-            f.stamina -= 22;
-            f._dealt = false;
-          } else {
-            setState(f, 'idle', 0.3 + Math.random() * 0.4);
-          }
+      // orbit the opponent: radial term corrects spacing, tangential term circles
+      const radialErr = d - f.preferredRange;              // >0 = too far away
+      const radialSpeed = Math.max(-1.4, Math.min(1.4, radialErr * 1.8));
+      const rvx = Math.cos(toFoe) * radialSpeed;
+      const rvz = Math.sin(toFoe) * radialSpeed;
+      const tang = toFoe + (Math.PI / 2) * f.circleDir;
+      const tSpeed = 0.9 + f.agility * 0.7;
+      const tvx = Math.cos(tang) * tSpeed;
+      const tvz = Math.sin(tang) * tSpeed;
+      // roam: drift tangent to the ring center so the fight travels the arena
+      const ringAng = Math.atan2(f.z, f.x) + (Math.PI / 2) * arenaSpin;
+      const roam = 0.7;
+      f.vx = rvx + tvx + Math.cos(ringAng) * roam;
+      f.vz = rvz + tvz + Math.sin(ringAng) * roam;
+
+      if (f.state !== 'circle') setState(f, 'circle', 0.4);
+
+      // periodic micro-decision: attack (primary), feint, or reposition
+      if (f.decideT <= 0) {
+        f.decideT = 0.3 + Math.random() * 0.45;
+        const r = Math.random();
+        const aimed = Math.abs(da) < 0.7;
+        if (d < 1.7 && aimed && f.stamina > 26 && r < f.aggression) {
+          setState(f, 'strike', 0.26);
+          f.stamina -= 20;
+          f._dealt = false;
+        } else if (d < 1.9 && f.stamina > 24 && r < 0.15) {
+          setState(f, 'feint', 0.3);
+          f.stamina -= 6;
+        } else {
+          // change it up so the duel travels around the ring
+          if (Math.random() < 0.4) f.circleDir *= -1;
+          f.preferredRange = 1.1 + Math.random() * 0.6;
         }
       }
       break;
     }
+  }
+
+  // hugging the boards? steer back inward so they sweep along the wall, not into it
+  const rr = Math.hypot(f.x, f.z);
+  if (rr > RING_RADIUS - 0.4) {
+    const inward = Math.atan2(-f.z, -f.x);
+    f.vx += Math.cos(inward) * 0.9;
+    f.vz += Math.sin(inward) * 0.9;
   }
 
   f.x += f.vx * dt;
@@ -194,20 +295,46 @@ function stepFighter(f, foe, dt) {
 function resolveHits() {
   const [a, b] = match.fighters;
   for (const [att, def] of [[a, b], [b, a]]) {
-    if (att.state === 'strike' && !att._dealt && att.stateT < 0.18) {
-      if (dist(att, def) < 0.85 && def.state !== 'defeated') {
-        att._dealt = true;
-        const dmg = 6 + Math.random() * 9;
-        def.health = Math.max(0, def.health - dmg);
-        // knock the defender back
-        const away = Math.atan2(def.z - att.z, def.x - att.x);
-        def.vx = Math.cos(away) * 2.4;
-        def.vz = Math.sin(away) * 2.4;
-        setState(def, 'hurt', 0.35);
-        if (def.health <= 0) {
-          setState(def, 'defeated', 999);
-        }
+    if (att.state !== 'strike' || att._dealt || att.stateT >= 0.18) continue;
+    if (def.state === 'defeated') continue;
+
+    const d = dist(att, def);
+
+    // dodged — the strike sails through empty air
+    if (def.state === 'dodge') {
+      if (d < 1.0) att._dealt = true; // committed and whiffed
+      continue;
+    }
+
+    // parried — deflect the blow, stagger the attacker, open a counter
+    if (def.state === 'parry' && d < 1.05) {
+      att._dealt = true;
+      const away = Math.atan2(att.z - def.z, att.x - def.x);
+      att.vx = Math.cos(away) * 3.0;
+      att.vz = Math.sin(away) * 3.0;
+      setState(att, 'hurt', 0.5);
+      def.stamina = Math.max(0, def.stamina - 12);
+      // riposte if the defender has anything left
+      if (def.stamina > 18) {
+        setState(def, 'strike', 0.24);
+        def.stamina -= 18;
+        def._dealt = false;
+      } else {
+        setState(def, 'recover', 0.3);
       }
+      continue;
+    }
+
+    // clean hit
+    if (d < 0.9) {
+      att._dealt = true;
+      const dmg = (7 + Math.random() * 9) * (1 + 0.6 * fightIntensity);
+      def.health = Math.max(0, def.health - dmg);
+      const away = Math.atan2(def.z - att.z, def.x - att.x);
+      def.vx = Math.cos(away) * 2.6;
+      def.vz = Math.sin(away) * 2.6;
+      setState(def, 'hurt', 0.35);
+      if (def.health <= 0) setState(def, 'defeated', 999);
     }
   }
 }
@@ -265,9 +392,18 @@ function simulate() {
     match.fighters.forEach((f) => setState(f, 'strut', 1));
     if (match.phaseT <= 0) {
       match.phase = 'fight';
+      fightElapsed = 0;
+      fightIntensity = 0;
       match.fighters.forEach((f) => setState(f, 'idle', 0.2));
     }
   } else if (match.phase === 'fight') {
+    fightElapsed += dt;
+    fightIntensity = Math.min(1, fightElapsed / 35);
+    arenaSpinT -= dt;
+    if (arenaSpinT <= 0) {
+      if (Math.random() < 0.55) arenaSpin *= -1; // sometimes reverse direction
+      arenaSpinT = 6 + Math.random() * 5;
+    }
     const [a, b] = match.fighters;
     stepFighter(a, b, dt);
     stepFighter(b, a, dt);

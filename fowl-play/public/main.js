@@ -337,6 +337,8 @@ function detectAudioEvents() {
     if (f.state !== prevFStates[i]) {
       if (prevFStates[i] !== null) {
         if (f.state === 'strike') sound.whoosh(p);
+        else if (f.state === 'dodge') sound.whoosh(p);
+        else if (f.state === 'parry') sound.tick(p);
         else if (f.state === 'victory') sound.crow(p);
         else if (f.state === 'defeated') sound.thud(p);
       }
@@ -519,11 +521,16 @@ function animateRooster(rooster, fs, t) {
   const isHurt = fs.state === 'hurt';
   const isVictory = fs.state === 'victory';
   const isStrut = fs.state === 'strut';
-  const moving = fs.state === 'approach';
+  const isParry = fs.state === 'parry';
+  const isDodge = fs.state === 'dodge';
+  // circling, feinting, approaching and dodging all read as active footwork
+  const moving = fs.state === 'approach' || fs.state === 'circle' ||
+                 fs.state === 'feint' || fs.state === 'dodge';
 
-  // smooth position/rotation toward server target
-  rooster.position.x += (fs.x - rooster.position.x) * Math.min(1, t.dt * 12);
-  rooster.position.z += (fs.z - rooster.position.z) * Math.min(1, t.dt * 12);
+  // smooth position toward server target (snappier so quick dodges read clearly)
+  const posLerp = Math.min(1, t.dt * (isDodge ? 20 : 13));
+  rooster.position.x += (fs.x - rooster.position.x) * posLerp;
+  rooster.position.z += (fs.z - rooster.position.z) * posLerp;
 
   // face movement/opponent direction (server angle is in XZ atan2(z,x))
   const targetRotY = -fs.angle + Math.PI / 2;
@@ -558,6 +565,17 @@ function animateRooster(rooster, fs, t) {
     } else if (isStrut) {
       bounce = Math.abs(Math.sin(t.time * 5)) * 0.06;
       ud.head.rotation.x = Math.sin(t.time * 5) * 0.15;
+    } else if (isParry) {
+      // braced defensive stance: crouch low, wings flared out
+      bounce = -0.04;
+      wingFlap = 0.9;
+      ud.head.rotation.x = 0.15;
+    } else if (isDodge) {
+      // quick low lean during the sidestep
+      bounce = 0.02;
+      wingFlap = 0.5;
+      legStride = Math.sin(t.time * 26) * 0.6;
+      ud.head.rotation.x = 0.1;
     } else if (moving) {
       bounce = Math.abs(Math.sin(t.time * 14)) * 0.05;
       legStride = Math.sin(t.time * 14) * 0.5;
